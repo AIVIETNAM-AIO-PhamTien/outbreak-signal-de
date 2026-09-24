@@ -1,0 +1,12 @@
+.venv/
+.hadoop/
+data/
+*.pyc
+__pycache__/
+.env
+.pytest_cache/
+.vscode/
+.idea/
+*.log
+
+CLAUDE.md
