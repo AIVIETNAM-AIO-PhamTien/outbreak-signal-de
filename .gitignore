@@ -8,5 +8,6 @@ __pycache__/
 .vscode/
 .idea/
 *.log
+*.csv
 
 CLAUDE.md
