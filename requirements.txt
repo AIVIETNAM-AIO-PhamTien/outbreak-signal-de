@@ -6,3 +6,5 @@ tenacity==9.0.0
 pandas==2.2.3
 python-dotenv==1.0.1
 pytest==8.3.3
+setuptools==84.0.0
+ipykernel==7.3.0
