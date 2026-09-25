@@ -1,0 +1,13 @@
+# Du lieu nap ve - khong commit len git
+data/
+output/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Spark
+spark-warehouse/
+*.crc
