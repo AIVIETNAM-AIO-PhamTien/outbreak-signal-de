@@ -29,6 +29,7 @@ SAMPLE_CSV_PATH = OUT_DIR / "opendengue_sea_sample.csv"
 # Ten nuoc Dong Nam A theo adm_0_name trong dataset OpenDengue.
 SEA_COUNTRIES = {
     "VIETNAM",
+    "VIET NAM",  # OpenDengue spells Vietnam with a space: 'VIET NAM'
     "THAILAND",
     "INDONESIA",
     "PHILIPPINES",
