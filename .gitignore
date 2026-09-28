@@ -11,3 +11,4 @@ venv/
 # Spark
 spark-warehouse/
 *.crc
+.DS_Store
