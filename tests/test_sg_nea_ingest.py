@@ -6,6 +6,7 @@ mocking them would mostly test the mocks.
 """
 
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +14,7 @@ from ingestion.common.validation import IngestionValidationError
 from ingestion.sg_nea_dengue import (
     build_rows,
     feature_to_row,
+    newest_snapshot_per_slot,
     poll_slot_id,
     validate_snapshot,
 )
@@ -125,3 +127,38 @@ class TestValidateSnapshot:
     def test_rejects_a_payload_that_is_not_a_feature_collection(self) -> None:
         with pytest.raises(IngestionValidationError, match="FeatureCollection"):
             validate_snapshot({"type": "Feature", "features": [SAMPLE_FEATURE]})
+
+
+class TestNewestSnapshotPerSlot:
+    """Re-polling inside one slot observes the same state, so it must replace."""
+
+    @staticmethod
+    def _paths(*stamps: str) -> list[Path]:
+        return [Path(f"clusters_{stamp}.json") for stamp in stamps]
+
+    def test_keeps_only_the_latest_fetch_of_a_slot(self) -> None:
+        # Both land in the 11:00 slot; counting both would double every
+        # statistic downstream.
+        chosen = newest_snapshot_per_slot(
+            self._paths("20260928T111549Z", "20260928T111917Z"), 60
+        )
+        assert [path.name for _, path in chosen] == ["clusters_20260928T111917Z.json"]
+
+    def test_keeps_fetches_from_different_slots(self) -> None:
+        chosen = newest_snapshot_per_slot(
+            self._paths("20260928T111549Z", "20260928T121549Z"), 60
+        )
+        assert len(chosen) == 2
+
+    def test_returns_snapshots_in_chronological_order(self) -> None:
+        chosen = newest_snapshot_per_slot(
+            self._paths("20260928T131549Z", "20260928T111549Z", "20260928T121549Z"), 60
+        )
+        stamps = [moment for moment, _ in chosen]
+        assert stamps == sorted(stamps)
+
+    def test_slot_width_comes_from_config(self) -> None:
+        # Same two fetches: one slot at 60 minutes, two slots at 15.
+        paths = self._paths("20260928T111549Z", "20260928T113000Z")
+        assert len(newest_snapshot_per_slot(paths, 60)) == 1
+        assert len(newest_snapshot_per_slot(paths, 15)) == 2
