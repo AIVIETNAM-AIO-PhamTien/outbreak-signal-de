@@ -4,6 +4,71 @@ Note lại sau mỗi buổi làm để cuối kỳ viết report đỡ phải nh
 
 ---
 
+## 28/9 - Gộp code cả nhóm về một nhánh
+
+### Vấn đề phải xử lý
+
+Đang có 4 nhánh chạy song song và **không ghép được vào nhau**:
+
+- `main` — SparkSession + Delta, smoke test. File `sg_nea_dengue.py` chỉ có đúng dòng
+  `import requests`, README thì mô tả 3 file chưa hề tồn tại.
+- `test/check_data_sg-nea` — ingestion NEA hoàn chỉnh, có test, có EDA.
+- `opendengue-news-rss` — ingestion OpenDengue + News RSS.
+- `data/test-source` — notebook `data_ingestion.ipynb` commit lên **rỗng 0 byte**, chỉ có
+  9 file PNG. Người phụ trách cần commit lại phần code.
+
+Nặng nhất là `opendengue-news-rss` là **root commit riêng**, không chung tổ tiên với `main`
+(`git merge-base` trả về rỗng). Merge thường sẽ từ chối.
+
+Cách xử lý: `git merge --allow-unrelated-histories` chứ không copy file sang. Copy thì mất
+authorship, mà đây là bài tập nhóm nên phần ai làm gì cần giữ lại được trong `git log`.
+
+### Mấy thứ phải chốt lại vì hai nhánh làm khác nhau
+
+| Chuyện | Nhánh này | Nhánh kia | Chốt |
+|---|---|---|---|
+| Định dạng Bronze | Parquet | Delta | **Delta** — cần `replaceWhere` để chạy lại không nhân đôi |
+| Tên cột phân vùng | `ingest_date` | (không có) | **`ingestion_date`** viết đầy đủ |
+| SparkSession | `src/spark_utils.py` | `ingestion/common/spark_session.py` | Giữ bản Delta, bê `showConsoleProgress=false` từ bản kia sang |
+| pyspark | 3.5.3 | 3.5.9 | **3.5.9** — 3.5.3 dính đúng SPARK-53759 mà README bên kia cảnh báo |
+| Bố cục | `src/` phẳng | `ingestion/` | **`ingestion/`** — import được bình thường, không phụ thuộc `sys.path[0]` |
+
+### Ba lớp mới, trước đây chưa nhánh nào có
+
+- `configs/sources.yaml` — mọi endpoint gom về một chỗ. Trước đây URL nằm rải rác thành
+  hằng số trong từng file.
+- `ingestion/common/metadata.py` — mỗi lần chạy đẻ ra một JSON: lấy từ đâu, bao nhiêu dòng,
+  mất bao lâu, lỗi gì. Chạy hỏng cũng vẫn ghi. Trước đây không có gì cả.
+- `ingestion/common/validation.py` + `logging.py` — thay cho `print()`.
+
+### Hai lỗi thật sự sửa được trong lúc gộp
+
+**`run_batch.py` cũ gọi job trần, không bọc try/except.** `ingest_opendengue.main()` chỉ bắt
+`requests.RequestException`, nên một lỗi `BadZipFile` hay lỗi Spark là vỡ cả vòng lặp —
+nguồn thứ hai không chạy, bảng tổng kết không in. Giờ mỗi nguồn bọc riêng.
+
+**NEA không giữ bản raw nào.** Nó ghi thẳng từ bộ nhớ vào Delta. Giờ lưu GeoJSON gốc xuống
+`data/landing/` như hai nguồn kia.
+
+### Kết quả chạy thật 28/9
+
+| Nguồn | Số dòng | Số cột |
+|---|---|---|
+| opendengue | 29.873 | 20 |
+| news_rss | 65 / lần fetch | 9 |
+| sg_nea | 11 cụm / snapshot | 13 |
+
+Test: 66 pass (60 unit + 6 integration). Integration test chạy thật Spark + Delta, đi hết
+chuỗi nguồn → landing → Bronze → metadata, có cả test chạy 3 lần vẫn ra 3 dòng.
+
+### Còn lại
+
+- Notebook rỗng ở nhánh `data/test-source` — cần commit lại.
+- Silver layer: chưa có dòng nào. Đây là việc tuần sau theo feedback TA.
+- Chưa set Task Scheduler thật, mới chạy tay.
+
+---
+
 ## Tuần 2 - làm phần ingestion và Bronze layer
 
 ### Mấy thứ phải tự quyết
