@@ -1,0 +1,71 @@
+# Dinh nghia nguon du lieu cho pipeline ingestion.
+#
+# Moi endpoint / tham so cua nguon deu khai bao o day, KHONG hardcode trong
+# code. Muon tat mot nguon thi doi enabled: false, khong phai sua code.
+#
+# KHONG dat API key / credential trong file nay (file nay commit len git).
+# Neu nguon nao can key, doc tu bien moi truong trong module cua nguon do.
+
+defaults:
+  mode: batch
+  timeout_seconds: 60
+  retries: 3
+
+sources:
+
+  # --- Nguon MVP 1: so ca benh co cau truc, phu ca Dong Nam A -------------
+  opendengue:
+    enabled: true
+    source_type: file_download
+    source_format: csv
+    schedule: daily            # phat hanh theo version, vai thang moi co ban moi
+    version: V1.3
+    url: https://github.com/OpenDengue/master-repo/raw/main/data/releases/V1.3/National_extract_V1_3.zip
+    timeout_seconds: 120       # file zip ~5MB, can lau hon mac dinh
+
+  # --- Nguon MVP 2: tin tuc, tin hieu som ---------------------------------
+  news_rss:
+    enabled: true
+    source_type: rss
+    source_format: xml
+    schedule: every_30_minutes # bai moi ra lien tuc
+    url: https://news.google.com/rss/search
+    params:
+      q: dengue Southeast Asia
+      hl: en
+      gl: US
+      ceid: US:en
+    user_agent: OutbreakSignalDE/0.1 (AIO student project)
+
+  # --- Nguon bo sung: da hoan thien, giu lai (khong nam tren duong gang) --
+  # Nguon DUY NHAT co toa do that (polygon cum dich).
+  sg_nea:
+    enabled: true
+    source_type: rest_api
+    source_format: geojson
+    schedule: daily            # NEA publish quanh 15:00 SGT, doi moi 1-4 ngay
+    dataset_id: d_dbfabf16158d1b0e1c420627c0819168
+    url: https://api-open.data.gov.sg/v1/public/api/datasets/{dataset_id}/poll-download
+    timeout_seconds: 30
+    poll_slot_minutes: 60      # do rong mot khe poll, dung lam batch_id
+
+  # --- Backlog: da khao sat, chua trien khai ------------------------------
+  # Bat len chi khi da co nguoi nhan va da co spike xac nhan schema.
+  who_gho:
+    enabled: false
+    source_type: rest_api
+    source_format: json
+    schedule: daily
+    url: https://xmart-api-public.who.int/ARBOV/V_DENGUE_GLOBAL_VALIDATED_PUBLIC
+    note: Chua trien khai. Ngoai scope MVP theo feedback TA (chot 2 nguon).
+
+  gdelt:
+    enabled: false
+    source_type: rest_api
+    source_format: json
+    schedule: every_30_minutes
+    url: https://api.gdeltproject.org/api/v2/doc/doc
+    note: >
+      Bi rate-limit (HTTP 429) tu mang test, nghi do IP dung chung bi chan san.
+      Script spike giu o spikes/test_gdelt_news.py de thu lai tu mang khac.
+      Da thay bang Google News RSS lam nguon tin tuc.

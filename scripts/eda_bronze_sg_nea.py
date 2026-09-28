@@ -15,7 +15,9 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from ingestion.common.spark_session import build_spark_session
-from ingestion.sg_nea_dengue import BRONZE_PATH
+from ingestion.common.paths import bronze_path
+
+BRONZE_PATH = bronze_path("sg_nea")
 
 
 def describe_schema(frame: DataFrame) -> None:

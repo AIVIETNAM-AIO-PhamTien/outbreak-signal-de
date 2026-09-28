@@ -9,6 +9,7 @@ from datetime import datetime
 
 import pytest
 
+from ingestion.common.validation import IngestionValidationError
 from ingestion.sg_nea_dengue import (
     build_rows,
     feature_to_row,
@@ -69,7 +70,17 @@ class TestFeatureToRow:
         assert row["case_count"] == 3
         assert row["cluster_updated_at_raw"] == "20260922152547"
         assert row["inc_crc"] == "639FF7772D47C8E0"
-        assert row["source"] == "sg_nea"
+
+    def test_records_which_landing_file_the_row_came_from(self) -> None:
+        # Spark cannot derive this itself here: the frame is built with
+        # createDataFrame(), so input_file_name() would come back empty.
+        row = feature_to_row(
+            SAMPLE_FEATURE,
+            "20260925T0600Z",
+            datetime(2026, 9, 25),
+            source_file="clusters_20260925T060000Z.json",
+        )
+        assert row["_source_file"] == "clusters_20260925T060000Z.json"
 
     def test_strips_localities_padded_by_the_source(self) -> None:
         assert self._row()["locality"] == "Bt Batok St 21 (Blk 207, 209, 210)"
@@ -108,9 +119,9 @@ class TestValidateSnapshot:
 
     def test_rejects_a_collection_with_no_features(self) -> None:
         # Writing this would record a false "no dengue clusters" state.
-        with pytest.raises(ValueError, match="no features"):
+        with pytest.raises(IngestionValidationError, match="khong co feature"):
             validate_snapshot({"type": "FeatureCollection", "features": []})
 
     def test_rejects_a_payload_that_is_not_a_feature_collection(self) -> None:
-        with pytest.raises(ValueError, match="FeatureCollection"):
+        with pytest.raises(IngestionValidationError, match="FeatureCollection"):
             validate_snapshot({"type": "Feature", "features": [SAMPLE_FEATURE]})
