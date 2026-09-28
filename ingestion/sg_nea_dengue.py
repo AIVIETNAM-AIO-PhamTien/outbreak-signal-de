@@ -232,6 +232,37 @@ def build_rows(
     ]
 
 
+def newest_snapshot_per_slot(
+    raw_files: list[Path], slot_minutes: int
+) -> list[tuple[datetime, Path]]:
+    """Moi khe poll chi giu lai snapshot MOI NHAT cua khe do.
+
+    Day la cho hien thuc hoa y nghia cua `poll_slot_id`: hai lan fetch roi vao
+    cung mot khe la hai lan quan sat CUNG mot trang thai, nen lan sau thay the
+    lan truoc chu khong cong don. Neu giu ca hai thi moi thong ke sau nay deu
+    bi dem gap doi - EDA se bao 22 cum va 234 ca trong khi Singapore that su
+    chi co 11 cum va 117 ca.
+
+    Fetch o khe khac thi van giu rieng, vi do la quan sat that su muon hon.
+
+    Args:
+        raw_files: Cac file raw trong landing cua ngay, ten dang
+            clusters_<run_id>.json.
+        slot_minutes: Do rong mot khe poll.
+
+    Returns:
+        Danh sach (fetched_at, path), moi khe mot phan tu, sap theo thoi gian.
+    """
+    newest: dict[str, tuple[datetime, Path]] = {}
+    for raw_path in raw_files:
+        stamp = raw_path.stem.removeprefix("clusters_")
+        fetched_at = datetime.strptime(stamp, RUN_ID_FORMAT)
+        slot = poll_slot_id(fetched_at, slot_minutes)
+        if slot not in newest or fetched_at > newest[slot][0]:
+            newest[slot] = (fetched_at, raw_path)
+    return sorted(newest.values())
+
+
 def fetch_raw(
     cfg: dict, ingestion_date: str, current_run_id: str, meta: IngestionMetadata
 ) -> Path:
@@ -291,11 +322,10 @@ def load_to_bronze(spark, cfg: dict, ingestion_date: str) -> int:
     """
     landing = landing_dir(SOURCE, ingestion_date)
     raw_files = check_landing_not_empty(landing, "clusters_*.json", SOURCE)
+    snapshots = newest_snapshot_per_slot(raw_files, cfg["poll_slot_minutes"])
 
     rows: list[dict[str, Any]] = []
-    for raw_path in raw_files:
-        stamp = raw_path.stem.removeprefix("clusters_")
-        fetched_at = datetime.strptime(stamp, RUN_ID_FORMAT)
+    for fetched_at, raw_path in snapshots:
         geojson = json.loads(raw_path.read_text(encoding="utf-8"))
         rows.extend(
             build_rows(
@@ -311,7 +341,11 @@ def load_to_bronze(spark, cfg: dict, ingestion_date: str) -> int:
             f"[{SOURCE}] doc {len(raw_files)} file raw nhung khong dung duoc dong nao"
         )
 
-    frame = spark.createDataFrame(rows, schema=BRONZE_SCHEMA)
+    # coalesce(1): nguon nay chi vai chuc dong. Mac dinh Spark chia theo so
+    # core (local[*] = 8 tren may nay), tuc la ghi 11 dong ra 8 file ti hon va
+    # spawn 8 Python worker cung luc - tren Windows co worker khong kip
+    # connect back, job chet voi "Python worker failed to connect back".
+    frame = spark.createDataFrame(rows, schema=BRONZE_SCHEMA).coalesce(1)
     # with_input_file=False: DataFrame nay tao tu bo nho nen input_file_name()
     # se tra ve chuoi rong; cot _source_file da duoc dien trong feature_to_row.
     enriched = add_bronze_columns(
