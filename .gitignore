@@ -1,12 +1,26 @@
-.venv/
-.hadoop/
+# Du lieu tai ve va sinh ra khi chay - khong commit len git
 data/
-*.pyc
+output/
+logs/
+*.log
+
+# Python
+.venv/
+venv/
 __pycache__/
-.env
+*.pyc
 .pytest_cache/
+.env
+
+# Spark
+spark-warehouse/
+*.crc
+
+# Windows-only Hadoop binaries (third-party build - xem README)
+.hadoop/
+
+# IDE
 .vscode/
 .idea/
-*.log
 
 CLAUDE.md
