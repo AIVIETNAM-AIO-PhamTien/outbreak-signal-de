@@ -17,17 +17,30 @@ Theo feedback của TA, scope MVP đã được thu gọn còn **2 nguồn thậ
 
 | Nguồn | Nội dung | Định dạng | Lịch chạy | Vai trò |
 |---|---|---|---|---|
-| **[OpenDengue](https://opendengue.org/data.html)** | Số ca bệnh theo quốc gia, cả SEA | CSV trong zip | 1 lần/ngày | Số liệu nền, đáng tin cậy |
+| **[OpenDengue](https://opendengue.org/data.html)** | Số ca bệnh cấp quốc gia **+ cấp tỉnh** (`Spatial_extract`), SEA | CSV trong zip | 1 lần/ngày | Ground truth, lịch sử dài (1960→) |
 | **[Google News RSS](https://news.google.com/rss)** | Tin tức nhắc tới dengue | XML | Mỗi 30 phút | Tín hiệu sớm, nhanh hơn số liệu chính thức |
+| **[WHO GHO](https://xmart-api-public.who.int/ARBOV/V_DENGUE_GLOBAL_VALIDATED_PUBLIC)** | Số ca bệnh cấp quốc gia, kiểm chứng bởi WHO | JSON (OData) | 1 lần/ngày | Ground truth **mới hơn OpenDengue rất nhiều** |
 | [Singapore NEA](https://data.gov.sg/datasets/d_dbfabf16158d1b0e1c420627c0819168/view) | Cụm dịch: số ca **+ polygon toạ độ** | GeoJSON | 1 lần/ngày | Nguồn bổ sung, đã hoàn thiện |
 
-Lý do cần cả hai nguồn MVP: OpenDengue chính xác nhưng trễ (phát hành theo version, trễ
-hàng tháng), tin tức thì nhanh nhưng không có số liệu. Kết hợp mới ra được "cảnh báo sớm".
+> ⚠️ **4 nguồn chính, vượt quá "2 nguồn MVP" TA đã chốt.** OpenDengue + News RSS là 2 nguồn
+> MVP ban đầu. WHO GHO và Singapore NEA được thêm sau vì lấp đúng lỗ hổng thật (độ trễ, độ
+> chi tiết địa lý) — nhưng đây là quyết định vượt scope, **cần báo lại TA** trước khi coi là
+> chính thức. Xem lý do chi tiết ở mục 11.
 
-Singapore NEA **không nằm trong 2 nguồn MVP** nhưng được giữ lại vì code đã hoàn thiện và
-đây là nguồn **duy nhất có toạ độ thật** — thứ mà bài toán "khoanh vùng nguy cơ" cần.
+Lý do cần News RSS: OpenDengue và WHO GHO đều chính xác nhưng có độ trễ (dù khác nhau nhiều),
+còn tin tức thì nhanh nhưng không có số liệu. Kết hợp mới ra được "cảnh báo sớm" đúng nghĩa.
 
-Nguồn đã khảo sát nhưng **chưa triển khai** — xem mục [11](#11-hạn-chế-đã-biết-về-truy-cập-nguồn).
+Lý do cần cả OpenDengue lẫn WHO GHO — hai nguồn **không thay thế nhau**: OpenDengue có lịch sử
+dài hơn và phủ đủ 11/11 nước SEA; WHO GHO mới hơn rất nhiều (trễ ~5 tuần so với ~17 tháng của
+OpenDengue) nhưng thiếu Philippines và Brunei. Giữ cả hai còn cho phép **phát hiện bất đồng**
+giữa hai nguồn cho cùng nước/tuần — một tín hiệu chất lượng dữ liệu mà một nguồn duy nhất
+không có được.
+
+Singapore NEA được giữ lại vì code đã hoàn thiện và là nguồn **duy nhất có toạ độ thật** —
+thứ mà bài toán "khoanh vùng nguy cơ" cần, nhưng chỉ phủ 1/11 nước nên không đại diện SEA.
+
+Nguồn đã khảo sát nhưng **chưa triển khai** (GDELT — bị chặn mạng) — xem mục
+[11](#11-hạn-chế-đã-biết-về-truy-cập-nguồn).
 
 ## 3. Kiến trúc
 
@@ -143,9 +156,10 @@ Kết quả thật (2026-09-29): `2.821.799 → 70.557 dòng` sau lọc, gồm c
 │   │   ├── metadata.py           # bản ghi metadata mỗi lần chạy
 │   │   ├── validation.py         # kiểm tra mức ingestion
 │   │   └── bronze.py             # ghi Delta + cột lineage
-│   ├── opendengue.py             # nguồn MVP 1
+│   ├── opendengue.py             # nguồn MVP 1 (Spatial_extract, lọc SEA)
 │   ├── news_rss.py               # nguồn MVP 2
-│   └── sg_nea_dengue.py          # nguồn bổ sung
+│   ├── who_gho.py                # nguồn bổ sung — ground truth mới hơn OpenDengue
+│   └── sg_nea_dengue.py          # nguồn bổ sung — polygon toạ độ thật
 ├── scripts/
 │   ├── run_batch.py              # chạy batch — điểm vào chính
 │   ├── check_bronze.py           # đọc lại Bronze để kiểm tra
@@ -249,6 +263,7 @@ $env:PYTHONPATH = (Get-Location).Path
 
 .venv\Scripts\python.exe scripts\run_batch.py --source opendengue
 .venv\Scripts\python.exe scripts\run_batch.py --source news_rss
+.venv\Scripts\python.exe scripts\run_batch.py --source who_gho
 .venv\Scripts\python.exe scripts\run_batch.py --source sg_nea
 ```
 
@@ -269,9 +284,9 @@ Kết quả (chạy thật ngày 2026-09-29):
 TONG KET INGESTION
 ============================================================
   opendengue  SUCCESS  70,557 dong
-  news_rss    SUCCESS  66 dong
-  sg_nea      SUCCESS  11 dong
-  who_gho     SKIPPED  Chua trien khai. Ngoai scope MVP theo feedback TA (chot 2 nguon).
+  news_rss    SUCCESS  131 dong
+  sg_nea      SUCCESS  22 dong
+  who_gho     SUCCESS  1,232 dong
   gdelt       SKIPPED  Bi rate-limit (HTTP 429) tu mang test, nghi do IP dung chung bi chan san.
 ============================================================
 ```
@@ -286,6 +301,7 @@ là lỗi).
 |---|---|---|
 | News | `run_batch.py --source news_rss` | 30 phút |
 | OpenDengue | `run_batch.py --source opendengue` | 1 lần/ngày |
+| WHO GHO | `run_batch.py --source who_gho` | 1 lần/ngày |
 | SG NEA | `run_batch.py --source sg_nea` | 1 lần/ngày, khung 15–16h SGT |
 
 Không dùng Airflow cho MVP — cài và học tốn nhiều thời gian nhưng không thêm giá trị cho
@@ -300,7 +316,8 @@ phạm vi hiện tại.
 | Nguồn | Số dòng | Số cột | Cột gốc được giữ nguyên |
 |---|---|---|---|
 | opendengue | 70.557 (đã lọc SEA) | 20 | `adm_0_name`, `adm_1_name`, `adm_2_name`, `ISO_A0`, `calendar_start_date`, `dengue_total`, … |
-| news_rss | 65 / lần fetch | 9 | `title`, `link`, `pubDate`, `source`, `description` |
+| news_rss | ~65 / lần fetch | 9 | `title`, `link`, `pubDate`, `source`, `description` |
+| who_gho | 1.232 (đã lọc SEA, 9/11 nước) | 20 | `COUNTRY`, `ISO3`, `START_DATE`, `CASES`, `WHO_REGION`, … |
 | sg_nea | ~11 cụm / snapshot | 13 | `locality`, `case_count`, `polygon_geojson`, `raw_payload`, … |
 
 Số cột = cột gốc + 4 cột truy vết ở [mục 4](#4-nguyên-tắc-tầng-bronze).
@@ -353,7 +370,7 @@ các cột `_source` / `_ingested_at` / `_source_file` trong bảng Bronze — �
 | Nguồn | Trạng thái | Chi tiết |
 |---|---|---|
 | **GDELT DOC 2.0** | Bị chặn | `HTTP 429` xác nhận lại 3 lần (29/9/2026), kể cả khi giãn 20s và xin 5 bản ghi/1 ngày — không phải lỗi gọi dồn dập, có vẻ là chặn IP mạng dùng chung. Giữ `spikes/test_gdelt_news.py` để thử lại từ mạng cá nhân. Đã thay bằng Google News RSS. |
-| **WHO GHO** | Đã xác nhận dùng được, chưa tích hợp | Test trực tiếp 29/9/2026: `HTTP 200`, dữ liệu tới tuần 24/08/2026 (mới hơn OpenDengue nhiều). Phủ 9/11 nước SEA (thiếu Philippines, Brunei). Ngoài scope MVP 2 nguồn theo feedback TA — khai báo sẵn trong `configs/sources.yaml` với `enabled: false`. |
+| **WHO GHO** | Đã tích hợp, phủ 9/11 nước | Chạy thật 29/9/2026: `1.232 dòng`, dữ liệu tới tuần 24/08/2026 (mới hơn OpenDengue rất nhiều — OpenDengue trễ ~17 tháng, WHO GHO trễ ~5 tuần). **Thiếu Philippines, Brunei** — đã kiểm tra kỹ, nguồn thực sự không có dữ liệu, không phải lỗi filter. Đây là nguồn thứ 4, **vượt scope "2 nguồn MVP" TA đã chốt** — cần báo lại TA. |
 | **ProMED** | Không làm | Không có cơ chế truy cập công khai phù hợp trong thời gian còn lại. Không triển khai để tránh scrape endpoint không được phép. |
 | **HealthMap** | Không làm | Như trên. Không tạo implementation giả, không bypass authentication, không scrape API không công bố. |
 | **Google News RSS** | Hạn chế nội dung | Không có trường quốc gia hay địa điểm nào. Suy ra quốc gia từ tiêu đề chỉ đạt ~22% (đo bằng keyword matching) — là việc của Silver, và là giới hạn trên của độ chính xác, cần nói rõ trong report. |
@@ -375,7 +392,9 @@ $env:PYTHONPATH = (Get-Location).Path
 | `test_metadata.py` | Đủ trường bắt buộc, checksum, duration, lần chạy thất bại |
 | `test_validation.py` | Nguồn không với tới được, file rỗng, file thiếu, landing rỗng |
 | `test_sg_nea_ingest.py` | Các hàm thuần của nguồn NEA |
-| `test_integration_bronze.py` | **nguồn → ingestion → Bronze → metadata**, chạy thật Spark + Delta |
+| `test_who_gho.py` | Hàm dựng OData `$filter` cho WHO GHO |
+| `test_integration_bronze.py` | OpenDengue: **nguồn → ingestion → Bronze → metadata** (kể cả filter SEA), chạy thật Spark + Delta |
+| `test_integration_who_gho.py` | WHO GHO: cùng chuỗi, chạy thật Spark + Delta |
 
 ## 13. Ngoài phạm vi hiện tại
 

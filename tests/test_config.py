@@ -63,8 +63,11 @@ class TestEnabledSources:
 class TestConfigThat:
     """Config that trong repo phai dung duoc, khong chi file gia trong test."""
 
-    def test_ba_nguon_mvp_deu_bat_va_du_truong_bat_buoc(self) -> None:
-        for name in ("opendengue", "news_rss", "sg_nea"):
+    def test_bon_nguon_dang_bat_deu_du_truong_bat_buoc(self) -> None:
+        # opendengue/news_rss/sg_nea la 3 nguon MVP + bo sung ban dau; who_gho
+        # la nguon thu 4 moi them, vuot qua "2 nguon MVP" TA da chot - xem
+        # ghi chu trong configs/sources.yaml.
+        for name in ("opendengue", "news_rss", "sg_nea", "who_gho"):
             cfg = source_config(name)
             assert cfg["enabled"] is True
             assert cfg["url"]
@@ -72,10 +75,22 @@ class TestConfigThat:
             assert cfg["source_format"]
             assert cfg["timeout_seconds"] > 0
 
+    def test_who_gho_co_danh_sach_loc_iso3(self) -> None:
+        cfg = source_config("who_gho")
+        assert cfg["filter_iso3"]
+        assert len(cfg["filter_iso3"]) == 11
+        assert "VNM" in cfg["filter_iso3"]
+
+    def test_opendengue_co_danh_sach_loc_ten_nuoc(self) -> None:
+        cfg = source_config("opendengue")
+        assert cfg["filter_countries"]
+        assert "VIET NAM" in cfg["filter_countries"]
+        assert "VIETNAM" not in cfg["filter_countries"]  # bug da sua, dung dau cach
+
     def test_nguon_backlog_phai_tat_va_co_ghi_chu_ly_do(self) -> None:
-        # who_gho va gdelt da khao sat nhung chua trien khai - phai tat, va
-        # phai noi ro ly do, khong de treo im lang.
-        for name in ("who_gho", "gdelt"):
+        # gdelt da khao sat nhung chua trien khai (bi chan mang) - phai tat,
+        # va phai noi ro ly do, khong de treo im lang.
+        for name in ("gdelt",):
             cfg = source_config(name)
             assert cfg["enabled"] is False
             assert cfg.get("note")
