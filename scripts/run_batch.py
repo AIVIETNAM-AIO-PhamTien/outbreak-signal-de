@@ -21,7 +21,7 @@ from pathlib import Path
 # PYTHONPATH: them goc repo vao sys.path truoc khi import package ingestion.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ingestion import news_rss, opendengue, who_gho  # noqa: E402
+from ingestion import hdx_cod, news_rss, opendengue, ph_doh, sg_nea, trends_th, who_gho  # noqa: E402
 from ingestion.common.config import all_sources, source_config  # noqa: E402
 from ingestion.common.logging import get_logger  # noqa: E402
 from ingestion.common.metadata import (  # noqa: E402
@@ -39,6 +39,11 @@ JOBS = {
     "opendengue": opendengue.ingest,
     "news_rss": news_rss.ingest,
     "who_gho": who_gho.ingest,
+    "hdx_cod_ab": hdx_cod.ingest_ab,
+    "hdx_cod_ps": hdx_cod.ingest_ps,
+    "trends_th": trends_th.ingest,
+    "ph_doh": ph_doh.ingest,
+    "sg_nea": sg_nea.ingest,
 }
 
 
@@ -66,6 +71,10 @@ def run_source(name: str, spark) -> tuple[str, int | None, str | None]:
 
     try:
         meta = JOBS[name](spark=spark)
+        for warning in meta.warnings:
+            log.warning("%s: %s", name, warning)
+        if meta.status == STATUS_SKIPPED:
+            return STATUS_SKIPPED, meta.record_count, "; ".join(meta.warnings)
         return STATUS_SUCCESS, meta.record_count, None
     except Exception as error:
         # Bat Exception rong la CO Y o day: moi nguon phai that bai doc lap.
@@ -85,7 +94,9 @@ def print_report(results: dict[str, tuple[str, int | None, str | None]]) -> None
     print("TONG KET INGESTION")
     print("=" * 60)
     for name, (status, count, reason) in results.items():
-        detail = f"{count:,} dong" if count is not None else (reason or "")
+        detail = f"{count:,} dong" if count is not None else ""
+        if reason:
+            detail = f"{detail} - {reason}" if detail else reason
         print(f"  {name:<{width}} {status.upper():<8} {detail}")
     print("=" * 60)
 

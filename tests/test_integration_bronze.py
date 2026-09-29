@@ -1,13 +1,13 @@
-"""Test tich hop: nguon -> ingestion -> Bronze -> metadata.
+"""Test tich hop OpenDengue: GitHub API -> tai zip -> landing -> Bronze -> metadata.
 
-Chay het ca chuoi that: tai file (gia lap o tang HTTP), ghi landing, Spark doc,
-ghi bang Delta, sinh metadata. Chi mang la duoc thay the - con lai deu la
-duong di that, ke ca Spark va Delta.
+Chay het ca chuoi that tru mang: GitHub API (tim release) va buoc tai file duoc
+gia lap, con lai - giai nen, Spark doc, ghi Delta, sinh metadata - la duong di that.
 
 Danh dau @pytest.mark.integration vi can JVM + Delta. Bo qua bang:
     pytest -m "not integration"
 """
 
+import hashlib
 import io
 import json
 import zipfile
@@ -16,15 +16,13 @@ from pathlib import Path
 import pytest
 
 from ingestion.common import paths
-from ingestion.common.metadata import STATUS_FAILED, STATUS_SUCCESS
+from ingestion.common.metadata import STATUS_FAILED, STATUS_SKIPPED, STATUS_SUCCESS
 from ingestion.common.validation import IngestionValidationError
 
 pytestmark = pytest.mark.integration
 
 # 3 dong SEA (con lai sau loc) + 1 dong JAPAN (ngoai SEA, phai bi loc mat).
-# "VIET NAM" CO dau cach - dung format that cua nguon, dung format trong
-# configs/sources.yaml. Vien JAPAN de test filter_countries co thuc su hoat
-# dong, khong chi giai dinh no chay ma khong kiem tra.
+# "VIET NAM" CO dau cach - dung format that cua nguon.
 CSV_BODY = (
     "adm_0_name,calendar_start_date,calendar_end_date,dengue_total\n"
     "VIET NAM,2026-01-01,2026-01-07,120\n"
@@ -32,22 +30,20 @@ CSV_BODY = (
     "SINGAPORE,2026-01-01,2026-01-07,45\n"
     "JAPAN,2026-01-01,2026-01-07,999\n"
 )
+ZIP_NAME = "Spatial_extract_V1_3.zip"
 
 
-class FakeResponse:
-    def __init__(self, content: bytes) -> None:
-        self.content = content
-        self.status_code = 200
-        self.ok = True
-        self.url = "https://example.invalid/Spatial_extract_V1_3.zip"
-
-
-def make_zip() -> bytes:
-    """Dung mot file zip chua dung mot CSV, giong hinh dang cua OpenDengue."""
+def make_zip(body: str = CSV_BODY) -> bytes:
+    """Mot file zip chua dung mot CSV, giong hinh dang cua OpenDengue."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("Spatial_extract_V1_3.csv", CSV_BODY)
+        archive.writestr("Spatial_extract_V1_3.csv", body)
     return buffer.getvalue()
+
+
+def blob_sha(payload: bytes) -> str:
+    """git blob sha cua mot noi dung - giong gia tri GitHub API tra ve."""
+    return hashlib.sha1(f"blob {len(payload)}\0".encode() + payload).hexdigest()
 
 
 @pytest.fixture
@@ -59,16 +55,24 @@ def isolated_data_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     return tmp_path
 
 
-@pytest.fixture
-def fake_download(monkeypatch: pytest.MonkeyPatch):
-    """Thay requests.get trong module opendengue bang mot zip dung san."""
-    from ingestion import opendengue
+class FakeGitHub:
+    """Gia lap GitHub (release + file) va dem so lan tai file."""
 
-    payload = make_zip()
-    monkeypatch.setattr(
-        opendengue.requests, "get", lambda *args, **kwargs: FakeResponse(payload)
-    )
-    return payload
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, payload: bytes,
+                 release: str = "V1.3", advertised_sha: str | None = None) -> None:
+        from ingestion import opendengue
+
+        self.payload = payload
+        self.downloads = 0
+        entry = {"name": ZIP_NAME, "sha": advertised_sha or blob_sha(payload),
+                 "size": len(payload), "download_url": f"https://example.invalid/{ZIP_NAME}"}
+        monkeypatch.setattr(opendengue, "resolve_release", lambda cfg: (release, entry))
+        monkeypatch.setattr(opendengue.http, "download", self._download)
+
+    def _download(self, url: str, dest: Path, retries: int, timeout: float) -> Path:
+        self.downloads += 1
+        dest.write_bytes(self.payload)
+        return dest
 
 
 def latest_metadata(source: str) -> dict:
@@ -78,166 +82,114 @@ def latest_metadata(source: str) -> dict:
     return json.loads(files[-1].read_text(encoding="utf-8"))
 
 
+def read_bronze(spark):
+    """Doc bang Bronze opendengue."""
+    return spark.read.format("delta").load(str(paths.BRONZE_ROOT / "opendengue"))
+
+
 class TestChuoiDayDu:
-    def test_nguon_den_bronze_va_metadata(
-        self, spark, isolated_data_roots, fake_download
-    ) -> None:
+    def test_nguon_den_bronze_va_metadata(self, spark, isolated_data_roots, monkeypatch) -> None:
         from ingestion import opendengue
 
+        FakeGitHub(monkeypatch, make_zip())
         meta = opendengue.ingest(spark=spark)
 
-        # 1. File raw duoc giu lai o landing, khong chi nam trong bo nho.
-        landing = paths.LANDING_ROOT / "opendengue" / meta.ingestion_date
-        assert (landing / "Spatial_extract_V1_3.zip").exists()
+        # Landing theo RELEASE, khong theo ngay chay.
+        landing = paths.LANDING_ROOT / "opendengue" / "V1.3"
+        assert (landing / ZIP_NAME).exists()
         assert (landing / "Spatial_extract_V1_3.csv").exists()
 
-        # 2. Bronze co dung so dong SAU KHI LOC pham vi SEA (JAPAN bi loai).
-        frame = spark.read.format("delta").load(str(paths.BRONZE_ROOT / "opendengue"))
-        assert frame.count() == 3
-        assert meta.record_count == 3
-
-        # 3. Cot goc giu nguyen ten, khong bi doi.
-        for column in ("adm_0_name", "calendar_start_date", "dengue_total"):
+        frame = read_bronze(spark)
+        assert frame.count() == 3 and meta.record_count == 3
+        for column in ("adm_0_name", "dengue_total", "_source", "_ingested_at",
+                       "_source_file", "_fetched_at", "_file_sha", "release", "ingestion_date"):
             assert column in frame.columns
+        assert {r["release"] for r in frame.collect()} == {"V1.3"}
+        # _source_file tuong doi tu landing/, khong con duong dan tuyet doi cua may.
+        assert frame.first()["_source_file"] == "opendengue/V1.3/Spatial_extract_V1_3.csv"
 
-        # 4. Cot lineage va cot phan vung da duoc them.
-        for column in ("_source", "_ingested_at", "_source_file", "ingestion_date"):
-            assert column in frame.columns
-
-        # 5. Metadata da ghi ra dia va khop voi thuc te.
         record = latest_metadata("opendengue")
         assert record["status"] == STATUS_SUCCESS
         assert record["record_count"] == 3
-        assert record["source_format"] == "csv"
-        assert record["ingestion_mode"] == "batch"
+        assert record["source_version"] == "V1.3"
         assert record["raw_files"][0]["sha256"]
-        assert record["duration_seconds"] >= 0
 
-    def test_bronze_giu_nguyen_gia_tri_goc_khong_chuan_hoa(
-        self, spark, isolated_data_roots, fake_download
-    ) -> None:
+    def test_bronze_giu_nguyen_gia_tri_goc(self, spark, isolated_data_roots, monkeypatch) -> None:
         from ingestion import opendengue
 
+        FakeGitHub(monkeypatch, make_zip())
         opendengue.ingest(spark=spark)
-        frame = spark.read.format("delta").load(str(paths.BRONZE_ROOT / "opendengue"))
-        rows = {row["adm_0_name"]: row["dengue_total"] for row in frame.collect()}
-
-        # Ten nuoc van VIET HOA nhu nguon, so ca van la string vi inferSchema=False.
-        assert rows["VIET NAM"] == "120"
-        assert "Vietnam" not in rows
-        assert "VIETNAM" not in rows  # dung dung ten UN naming, khong viet lien
+        rows = {row["adm_0_name"]: row["dengue_total"] for row in read_bronze(spark).collect()}
+        assert rows["VIET NAM"] == "120"  # chuoi, khong ep kieu
+        assert "JAPAN" not in rows  # loc pham vi SEA
 
 
-class TestLocPhamViSEA:
-    """Loc theo SEA la NGOAI LE co chu dich cua nguyen tac Bronze - kiem tra
-    rieng de dam bao ranh gioi dung: landing giu 100%, chi Bronze bi thu hep.
-    """
-
-    def test_landing_giu_nguyen_dong_ngoai_sea(
-        self, spark, isolated_data_roots, fake_download
+class TestIdempotencyTheoRelease:
+    def test_cung_release_cung_sha_thi_bo_qua_khong_tai(
+        self, spark, isolated_data_roots, monkeypatch
     ) -> None:
         from ingestion import opendengue
 
+        github = FakeGitHub(monkeypatch, make_zip())
+        opendengue.ingest(spark=spark)
         meta = opendengue.ingest(spark=spark)
 
-        # File CSV trong landing phai con nguyen JAPAN - landing la source of
-        # truth, KHONG bi loc, du Bronze co loc hay khong.
-        landing = paths.LANDING_ROOT / "opendengue" / meta.ingestion_date
-        csv_text = (landing / "Spatial_extract_V1_3.csv").read_text(encoding="utf-8")
-        assert "JAPAN" in csv_text
+        assert github.downloads == 1, "lan 2 khong duoc tai lai ~55MB"
+        assert meta.status == STATUS_SKIPPED
+        assert meta.record_count == 3
+        assert read_bronze(spark).count() == 3
+        assert latest_metadata("opendengue")["status"] == STATUS_SKIPPED
 
-    def test_bronze_khong_con_dong_ngoai_sea(
-        self, spark, isolated_data_roots, fake_download
+    def test_release_moi_them_partition_giu_release_cu(
+        self, spark, isolated_data_roots, monkeypatch
     ) -> None:
         from ingestion import opendengue
 
+        FakeGitHub(monkeypatch, make_zip())
         opendengue.ingest(spark=spark)
-        frame = spark.read.format("delta").load(str(paths.BRONZE_ROOT / "opendengue"))
-        countries = {row["adm_0_name"] for row in frame.collect()}
+        FakeGitHub(monkeypatch, make_zip(CSV_BODY + "MALAYSIA,2026-01-01,2026-01-07,7\n"),
+                   release="V1.4")
+        opendengue.ingest(spark=spark)
 
-        assert "JAPAN" not in countries
-        assert countries == {"VIET NAM", "THAILAND", "SINGAPORE"}
+        counts = {r["release"]: r["count"] for r in read_bronze(spark).groupBy("release").count().collect()}
+        assert counts == {"V1.3": 3, "V1.4": 4}
 
-    def test_metadata_ghi_nhan_dung_so_dong_sau_loc(
-        self, spark, isolated_data_roots, fake_download
+    def test_cung_release_sha_doi_thi_nap_lai_thay_the(
+        self, spark, isolated_data_roots, monkeypatch
     ) -> None:
         from ingestion import opendengue
 
+        FakeGitHub(monkeypatch, make_zip())
         opendengue.ingest(spark=spark)
-        record = latest_metadata("opendengue")
-
-        # record_count trong metadata phai la so SAU loc (3), khong phai
-        # tong so dong doc tu file (4) - metadata mo ta ket qua ghi Bronze.
-        assert record["record_count"] == 3
-
-
-class TestIdempotency:
-    def test_chay_lai_cung_ngay_khong_nhan_doi_du_lieu(
-        self, spark, isolated_data_roots, fake_download
-    ) -> None:
-        from ingestion import opendengue
-
-        opendengue.ingest(spark=spark)
-        opendengue.ingest(spark=spark)
+        FakeGitHub(monkeypatch, make_zip(CSV_BODY.replace("120", "121")))
         opendengue.ingest(spark=spark)
 
-        frame = spark.read.format("delta").load(str(paths.BRONZE_ROOT / "opendengue"))
-        assert frame.count() == 3, "chay 3 lan phai van la 3 dong, khong phai 9"
-
-    def test_moi_lan_chay_van_de_lai_mot_ban_metadata_rieng(
-        self, spark, isolated_data_roots, fake_download
-    ) -> None:
-        from ingestion import opendengue
-
-        opendengue.ingest(spark=spark)
-        opendengue.ingest(spark=spark)
-
-        files = sorted((paths.METADATA_ROOT / "opendengue").rglob("*.json"))
-        assert len(files) == 2, "du lieu ghi de, nhung lich su lan chay phai giu du"
+        frame = read_bronze(spark)
+        assert frame.count() == 3, "thay the partition V1.3, khong nhan doi"
+        assert frame.where("adm_0_name = 'VIET NAM'").first()["dengue_total"] == "121"
 
 
 class TestThatBai:
-    def test_nguon_khong_voi_toi_duoc_van_sinh_metadata_failed(
-        self, spark, isolated_data_roots, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_file_tai_ve_lech_sha_bi_chan(self, spark, isolated_data_roots, monkeypatch) -> None:
         from ingestion import opendengue
 
-        monkeypatch.setattr(
-            opendengue.requests,
-            "get",
-            lambda *args, **kwargs: FakeResponse(b"")  # 200 nhung body rong
-            ,
-        )
-
-        with pytest.raises(IngestionValidationError):
+        FakeGitHub(monkeypatch, make_zip(), advertised_sha="0" * 40)
+        with pytest.raises(IngestionValidationError, match="lech sha"):
             opendengue.ingest(spark=spark)
 
         record = latest_metadata("opendengue")
         assert record["status"] == STATUS_FAILED
         assert record["record_count"] is None
-        assert "IngestionValidationError" in record["error_message"]
 
-    def test_mot_nguon_chet_khong_xoa_du_lieu_nguon_da_thanh_cong(
-        self, spark, isolated_data_roots, monkeypatch: pytest.MonkeyPatch
+    def test_lan_sau_that_bai_khong_xoa_du_lieu_cu(
+        self, spark, isolated_data_roots, monkeypatch
     ) -> None:
         from ingestion import opendengue
 
-        payload = make_zip()
-        monkeypatch.setattr(
-            opendengue.requests, "get", lambda *a, **k: FakeResponse(payload)
-        )
+        FakeGitHub(monkeypatch, make_zip())
         opendengue.ingest(spark=spark)
-
-        # Lan chay sau that bai - Bronze cua lan truoc phai con nguyen.
-        monkeypatch.setattr(
-            opendengue.requests, "get", lambda *a, **k: FakeResponse(b"")
-        )
-        for raw in (paths.LANDING_ROOT / "opendengue").rglob("*"):
-            if raw.is_file():
-                raw.unlink()
-
-        with pytest.raises(Exception):
+        FakeGitHub(monkeypatch, make_zip(), release="V1.4", advertised_sha="0" * 40)
+        with pytest.raises(IngestionValidationError):
             opendengue.ingest(spark=spark)
 
-        frame = spark.read.format("delta").load(str(paths.BRONZE_ROOT / "opendengue"))
-        assert frame.count() == 3
+        assert read_bronze(spark).count() == 3

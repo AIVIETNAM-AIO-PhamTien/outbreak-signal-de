@@ -1,19 +1,24 @@
 # OutbreakSignal DE - Dengue Early Warning (Bronze Ingestion)
 
-Hệ thống thu thập và lưu trữ dữ liệu cảnh báo sớm dịch sốt xuất huyết ở Đông Nam Á.
+Hệ thống thu thập và lưu trữ dữ liệu cảnh báo sớm dịch sốt xuất huyết ở **11 nước Đông Nam Á**.
 Nhóm Microwave - AIO 2026, Module 4 (*Data Sources and Data Ingestion using PySpark*).
+
+> Tài liệu kèm theo:
+> - [docs/handout-silver-layer.md](docs/handout-silver-layer.md): data dictionary mọi bảng
+>   Bronze, dành cho người làm Silver;
+> - [docs/bronze-fixes.md](docs/bronze-fixes.md): lỗi Bronze phát hiện khi thử dựng Silver/Gold
+>   (nhánh `feat/silver-gold`) và cách đã sửa.
 
 ## Chạy nhanh
 
-Yêu cầu: Java 17 và Python 3.11/3.12 (Windows cần thêm winutils, xem [mục 6](#6-cài-đặt)).
-Trên Windows dùng **PowerShell**, không dùng Git Bash.
+Cần Java 17 và Python 3.11/3.12. Windows cần thêm winutils, xem [mục 6](#6-cài-đặt). Trên
+Windows dùng **PowerShell**, không dùng Git Bash.
 
 ```powershell
 git clone https://github.com/AIVIETNAM-AIO-PhamTien/outbreak-signal-de.git ; cd outbreak-signal-de
 py -3.11 -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\python.exe scripts
-un_batch.py        # ingest 3 nguồn: Landing → Bronze
+.venv\Scripts\python.exe scripts\run_batch.py        # ingest mọi nguồn: Landing → Bronze
 .venv\Scripts\python.exe scripts\check_bronze.py     # đọc lại Bronze để kiểm tra
 ```
 ```bash
@@ -23,176 +28,142 @@ python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python scripts/check_bronze.py
 ```
 
-Dữ liệu sinh ra ở `data/` (gitignored, không có sẵn trong repo) - ai clone về đều tự chạy để có data.
+`data/` được gitignore, không có sẵn trong repo; ai clone về cũng tự chạy để sinh dữ liệu.
 
 ## 1. Mục tiêu
 
-Phát hiện sớm các khu vực có nguy cơ bùng phát sốt xuất huyết ở Đông Nam Á.
+Phát hiện sớm những khu vực có nguy cơ bùng phát sốt xuất huyết, theo kiểu **HealthMap**: kết
+hợp tín hiệu tin tức (nhanh, nhưng không có số liệu) với baseline mùa vụ tính từ số ca chính
+thức (chính xác, nhưng trễ). Đây là thống kê mô tả, không phải mô hình dự báo.
 
-Phạm vi hiện tại dừng ở **tầng Bronze**: thu thập dữ liệu từ nhiều nguồn khác nhau, giữ
-nguyên trạng, và đưa vào một data lake có cấu trúc để các bước sau xử lý tiếp.
-
-Theo feedback của TA, scope MVP đã được thu gọn còn **2 nguồn thật**, luồng chính là
-**batch ingestion → Bronze → Silver**. Kafka streaming và Gold layer chuyển thành extension.
+Phạm vi repo này dừng ở **tầng Bronze**: thu thập dữ liệu từ nhiều nguồn, giữ nguyên trạng, và
+đưa vào một data lake có cấu trúc (Delta Lake) để tầng Silver xử lý tiếp. Một bản Silver/Gold +
+app thử độ khả thi nằm ở nhánh `feat/silver-gold`.
 
 ## 2. Nguồn dữ liệu
 
-| Nguồn | Nội dung | Định dạng | Lịch chạy | Vai trò |
+Chỉ dùng nguồn có API, RSS hoặc file phát hành chính thức. **Không scrape HTML/PDF, không dùng
+dữ liệu giả lập.**
+
+| Nguồn (bảng Bronze) | Nội dung | Định dạng | Lịch | Vai trò |
 |---|---|---|---|---|
-| **[OpenDengue](https://opendengue.org/data.html)** | Số ca bệnh cấp quốc gia **+ cấp tỉnh** (`Spatial_extract`), SEA | CSV trong zip | 1 lần/ngày | Ground truth, lịch sử dài (1960→) |
-| **[Google News RSS](https://news.google.com/rss)** | Tin tức nhắc tới dengue | XML | Mỗi 30 phút | Tín hiệu sớm, nhanh hơn số liệu chính thức |
-| **[WHO GHO](https://xmart-api-public.who.int/ARBOV/V_DENGUE_GLOBAL_VALIDATED_PUBLIC)** | Số ca bệnh cấp quốc gia, kiểm chứng bởi WHO | JSON (OData) | 1 lần/ngày | Ground truth **mới hơn OpenDengue rất nhiều** |
+| **[OpenDengue](https://opendengue.org/data.html)** (`opendengue`) | Số ca cấp quốc gia + tỉnh (`Spatial_extract`), lọc 11 nước | CSV trong zip | kiểm tra hằng ngày | Lịch sử dài (1960→), nhưng trễ ~17 tháng |
+| **[WHO GHO](https://xmart-api-public.who.int/ARBOV/V_DENGUE_GLOBAL_VALIDATED_PUBLIC)** (`who_gho`) | Số ca cấp quốc gia, 9/11 nước (không có PHL, BRN) | JSON (OData) | hằng ngày | Số ca **gần đây** (trễ ~5 tuần) |
+| **[Google News RSS](https://news.google.com/rss)** (`news_rss`) | 11 feed theo nước, ngôn ngữ bản xứ, 7 ngày gần nhất | XML | 30 phút | Tín hiệu sớm |
+| **[HDX COD-AB](https://data.humdata.org/)** (`hdx_cod_ab`) | Đơn vị hành chính (P-code, tên, toạ độ tâm), 9 nước | XLSX | hằng tuần | Khoá cấp tỉnh |
+| **HDX COD-PS** (`hdx_cod_ps`) | Dân số theo đơn vị hành chính | CSV | hằng tuần | Ca / 100.000 dân |
+| **[TRENDS](https://zenodo.org/)** (`trends_th_*`) | Thái Lan, tuần × 77 tỉnh, 2016–2025 | XLSX (Zenodo) | hằng tuần | Số ca cấp tỉnh gần đây |
+| **PH DOH** (`ph_doh`) | Philippines, tuần × tỉnh, tới 12/2020 | CSV (HDX) | hằng tuần | Số ca cấp tỉnh (lịch sử) |
+| **[Singapore NEA](https://data.gov.sg/)** (`sg_nea`) | Cụm dịch đang hoạt động (polygon) | GeoJSON | hằng ngày | Vị trí cụm dịch |
 
-Lý do cần News RSS: OpenDengue và WHO GHO đều chính xác nhưng có độ trễ (dù khác nhau nhiều),
-còn tin tức thì nhanh nhưng không có số liệu. Kết hợp mới ra được "cảnh báo sớm" đúng nghĩa.
+**Vì sao cần cả OpenDengue lẫn WHO GHO:** hai nguồn không thay thế được nhau.
+- OpenDengue có lịch sử dài và phủ đủ 11 nước.
+- WHO GHO mới hơn nhiều, nhưng thiếu Philippines và Brunei.
 
-Lý do cần cả OpenDengue lẫn WHO GHO - hai nguồn **không thay thế nhau**: OpenDengue có lịch sử
-dài hơn và phủ đủ 11/11 nước SEA; WHO GHO mới hơn rất nhiều (trễ ~5 tuần so với ~17 tháng của
-OpenDengue) nhưng thiếu Philippines và Brunei. Giữ cả hai còn cho phép **phát hiện bất đồng**
-giữa hai nguồn cho cùng nước/tuần - một tín hiệu chất lượng dữ liệu mà một nguồn duy nhất
-không có được.
-
+Trên 162 tháng cả hai nguồn cùng có số liệu, độ lệch trung vị là 0%, nên hai nguồn ghép được
+thành một chuỗi lịch sử chung ở Silver.
 
 ## 3. Kiến trúc
 
 <p align="center"><img src="assets/outbreak-pipeline.png" alt="Luồng ingest Landing → Bronze" width="600"></p>
 
-*Hình: luồng ingest từ nguồn → Python → `data/landing/` → PySpark → `data/bronze/`. Hình vẽ cả Singapore NEA; nguồn này đã gỡ khỏi pipeline hiện tại (xem mục 2.1).*
-
-Sơ đồ chi tiết hơn (Mermaid):
+*Hình: luồng ingest Landing → Bronze, vẽ khi mới có các nguồn đầu tiên. Sơ đồ đầy đủ ở dưới.*
 
 ```mermaid
 flowchart LR
-    subgraph acq["Thu thập (Python thuần + requests)"]
-        OD[OpenDengue<br/>zip → CSV]
-        RSS[Google News RSS<br/>XML]
-        WHO[WHO GHO<br/>OData JSON]
+    subgraph acq["Thu thập (Python + requests, retry)"]
+        SRC[OpenDengue · WHO · News RSS<br/>HDX COD · TRENDS · PH DOH · SG NEA]
     end
-
-    subgraph landing["data/landing/ — bản gốc nguyên trạng"]
-        L[(file raw<br/>theo nguồn + ngày)]
-    end
-
-    subgraph spark["PySpark"]
+    L[(data/landing/<br/>bản gốc nguyên trạng)]
+    subgraph spark["PySpark + Delta Lake"]
         V[Validation<br/>ingestion-level]
-        W[Ghi Delta<br/>+ cột lineage]
+        B[(data/bronze/<br/>toàn string + lineage)]
     end
-
-    subgraph bronze["data/bronze/ — Delta, phân vùng theo ingestion_date"]
-        B[(opendengue)]
-        B2[(news_rss)]
-        B3[(who_gho)]
-    end
-
     M[(data/metadata/<br/>1 JSON mỗi lần chạy)]
 
-    OD --> L
-    RSS --> L
-    WHO --> L
-    L --> V --> W
-    W --> B & B2 & B3
-    W -.-> M
+    SRC --> L --> V --> B
     acq -.-> M
+    V -.-> M
 ```
 
-**Lý do tách 2 bước:** Spark **không** gọi được API hay crawl web, Spark chỉ biết đọc file
-có sẵn trên đĩa. Nên phải dùng Python thuần (`requests`) tải dữ liệu về `data/landing/`
-trước, rồi Spark mới đọc được. Logic thu thập của từng nguồn tách hẳn khỏi phần xử lý Spark.
+- **Tách thu thập và Spark thành 2 bước** vì Spark không gọi được API; Spark chỉ đọc file có sẵn
+  trên đĩa. Python thuần tải dữ liệu về `data/landing/` trước, sau đó Spark mới đọc.
+- **Logic thu thập của từng nguồn tách hẳn khỏi phần Spark**, và dùng chung module HTTP có retry
+  (`ingestion/common/http.py`).
 
 ## 4. Nguyên tắc tầng Bronze
 
-Bronze **giữ nguyên trạng dữ liệu nguồn**. Không đổi tên cột, không lọc, không xoá trùng,
-không ép kiểu dữ liệu, không join, không suy ra trường mới.
+Bronze **giữ nguyên trạng dữ liệu nguồn**:
+- không đổi tên cột, không xoá trùng, không join, không suy ra trường mới;
+- mọi cột đọc dưới dạng **string**. Ép kiểu là việc của Silver.
 
-Ví dụ - nguồn trả về:
+Lý do đọc toàn string: để Spark tự suy kiểu thì cột đang toàn null (ví dụ `POPULATION` của WHO)
+sẽ bị suy thành string. Hôm nào cột đó có số, kiểu đổi, và bước ghi Delta sẽ vỡ.
 
-```json
-{"country": "VNM", "reporting_period": "2026-06", "confirmed_cases": 120}
-```
-
-Bronze phải giữ **y nguyên** như vậy. Việc đổi `"VNM"` → `"Vietnam"`, đổi tên
-`confirmed_cases` → `cases`, hay parse `"2026-06"` thành ngày, đều là việc của **Silver**.
-
-Thứ duy nhất Bronze được phép thêm là 4 cột truy vết:
+Bronze chỉ thêm các cột truy vết sau:
 
 | Cột | Ý nghĩa |
 |---|---|
 | `_source` | Tên nguồn |
-| `_ingested_at` | Thời điểm nạp (ISO-8601 UTC) |
-| `_source_file` | File raw trong landing mà dòng này đến từ đó |
-| `ingestion_date` | Cột phân vùng, dạng `YYYY-MM-DD` |
+| `_ingested_at` | Thời điểm ghi Delta (UTC). Bị ghi lại khi dựng lại partition |
+| `_fetched_at` | Thời điểm **gọi API**, ghi ngay trong file landing (news, WHO, SG NEA). Không bị ghi đè |
+| `_source_file` | File landing mà dòng này đến từ đó, tính từ thư mục `landing/` |
+| cột phân vùng | `ingestion_date` (nguồn theo ngày) hoặc phiên bản (`release`, `_version`, `_release`) |
+
+Nguồn phát hành theo phiên bản còn thêm dấu vân tay file (`_file_sha`, `_file_md5`) để biết đã
+nạp phiên bản đó chưa.
 
 **Hai bản dữ liệu, hai vai trò:**
+- `data/landing/` là bản **gốc byte-for-byte**, không bao giờ bị sửa. Đây là source of truth.
+- `data/bronze/` là bản **Delta** để Spark query được.
 
-- `data/landing/` - bản **gốc byte-for-byte**, không bao giờ bị sửa. Đây là source of truth.
-- `data/bronze/` - bản **Delta** để Spark query được, giữ nguyên nội dung + 4 cột trên.
+### 4.1 Idempotency
 
-Tách hai cái vì Bronze cần query được, mà nguyên tắc "giữ nguyên trạng nguồn" cũng phải có
-chỗ để thoả mãn.
+| Kiểu nguồn | Nguồn | Cách làm |
+|---|---|---|
+| Theo ngày | `news_rss`, `who_gho`, `sg_nea` | Dựng lại partition ngày từ mọi file landing của ngày đó, ghi đè bằng `replaceWhere`. Chạy lại không nhân đôi |
+| Theo phiên bản | `opendengue`, `hdx_*`, `trends_th`, `ph_doh` | Partition theo phiên bản. Phiên bản + dấu vân tay đã có trong Bronze thì **bỏ qua** (SKIPPED), không tải lại |
 
-### 4.1 Ngoại lệ: lọc phạm vi cho OpenDengue
+Với tin tức, mỗi lần fetch là một quan sát riêng nên số dòng tăng dần; đó là chủ ý. Việc gộp
+bài trùng thuộc về Silver.
 
-`ingestion/opendengue.py` **lọc dòng** trước khi ghi Bronze - điều này trông như vi phạm
-"không lọc" ở trên. Đây là ngoại lệ có chủ đích, áp dụng đúng một chỗ, lý do:
+### 4.2 Ngoại lệ: lọc phạm vi ở Bronze
 
-OpenDengue dùng **`Spatial_extract`** (không phải `National_extract`) để có dữ liệu cấp
-tỉnh - `National_extract` chỉ có cấp quốc gia (`adm_1_name`/`adm_2_name` luôn là chuỗi
-`"NA"`, xác nhận bằng EDA). Vì dự án sẽ làm tầng Silver hướng tới "khoanh vùng nguy cơ",
-Bronze phải giữ cấp tỉnh ngay từ đầu - Silver không thể suy ngược dữ liệu tỉnh từ dữ liệu
-đã gộp cấp quốc gia.
-
-Nhưng `Spatial_extract` là **2.821.799 dòng toàn cầu** (~55MB nén), trong khi phạm vi dự
-án chỉ là 11 nước Đông Nam Á - chiếm **2,5%** dữ liệu gốc. Giữ nguyên 97,5% dữ liệu sẽ
-không bao giờ được dùng là chi phí thật (dung lượng, thời gian ingest, thời gian mọi truy
-vấn Silver sau này), không phải lý thuyết.
-
-**Ranh giới đặt ra:**
-
-- `data/landing/` giữ **100%** file CSV gốc, không đụng đến - đúng nguyên tắc source of truth.
-- `data/bronze/` chỉ giữ phần **trong phạm vi SEA** (`adm_0_name` khớp danh sách 11 nước
-  trong `configs/sources.yaml`, khoá `filter_countries`).
-- Việc lọc là chọn **dòng nào được thu thập vào kho**, không sửa **giá trị** của dòng nào
-  còn lại - không đổi tên, không chuẩn hoá, không ép kiểu. Về bản chất gần với việc chọn
-  tham số nào khi gọi API (ví dụ `$filter` của `who_gho`) hơn là một phép biến đổi nghiệp vụ.
-
-Kết quả thật (2026-09-29): `2.821.799 → 70.557 dòng` sau lọc, gồm cả `Admin0` (quốc gia,
-4.841 dòng) lẫn `Admin1`/`Admin2` (tỉnh/huyện, 65.716 dòng, 329 tỉnh phân biệt).
+`opendengue` và `hdx_cod_ps` **lọc dòng** về 11 nước trước khi ghi Bronze.
+- **Lý do:** `Spatial_extract` có 2.821.799 dòng toàn cầu, phần Đông Nam Á chỉ chiếm 2,5%
+  (70.557 dòng).
+- **Giới hạn của ngoại lệ:**
+  - `data/landing/` vẫn giữ 100% file gốc.
+  - Bộ lọc chỉ chọn dòng *nào* được thu thập, không sửa giá trị của dòng nào. Về bản chất, nó
+    gần với tham số `$filter` khi gọi API của WHO hơn là một phép biến đổi.
+- **Vì sao dùng `Spatial_extract`:** `National_extract` không có cấp tỉnh (`adm_1_name` luôn
+  là `"NA"`).
 
 ## 5. Cấu trúc thư mục
 
 ```
 .
-├── configs/
-│   └── sources.yaml              # mọi endpoint / lịch chạy / bật-tắt nguồn
+├── configs/sources.yaml           # mọi endpoint / lịch / bật-tắt nguồn
 ├── ingestion/
-│   ├── common/
-│   │   ├── spark_session.py      # SparkSession + Delta, dùng chung mọi job
-│   │   ├── config.py             # đọc sources.yaml
-│   │   ├── paths.py              # landing / bronze / metadata + mốc thời gian
-│   │   ├── logging.py            # log ra console + logs/ingestion_<ngày>.log
-│   │   ├── metadata.py           # bản ghi metadata mỗi lần chạy
-│   │   ├── validation.py         # kiểm tra mức ingestion
-│   │   └── bronze.py             # ghi Delta + cột lineage
-│   ├── opendengue.py             # nguồn MVP 1 (Spatial_extract, lọc SEA)
-│   ├── news_rss.py               # nguồn MVP 2
-│   └── who_gho.py                # nguồn bổ sung — ground truth mới hơn OpenDengue
+│   ├── common/                    # spark_session, config, paths, logging, metadata,
+│   │                              # validation, bronze, http (retry), hdx, excel
+│   ├── opendengue.py  news_rss.py  who_gho.py
+│   ├── hdx_cod.py                 # hdx_cod_ab + hdx_cod_ps
+│   ├── trends_th.py  ph_doh.py  sg_nea.py
 ├── scripts/
-│   ├── run_batch.py              # chạy batch — điểm vào chính
-│   ├── check_bronze.py           # đọc lại Bronze để kiểm tra
-│   └── smoke_test.py             # kiểm tra Spark + Delta + Java
-├── spikes/                       # script test nhanh từng nguồn (giai đoạn khảo sát)
-├── notebooks/
+│   ├── run_batch.py               # ingest — điểm vào của Bronze
+│   ├── check_bronze.py            # đọc lại Bronze để kiểm tra
+│   └── smoke_test.py              # kiểm tra Spark + Delta + Java
 ├── tests/
-├── assets/                       # ảnh dùng chung cho README / report
 ├── docs/
-│   ├── bronze-layer-report.md    # report kỹ thuật tầng Bronze
-│   └── handout-silver-layer.md   # bàn giao cho người làm Silver
-├── data/                         # gitignored — tự sinh khi chạy
-│   ├── landing/<nguồn>/<ngày>/
-│   ├── bronze/<nguồn>/ingestion_date=<ngày>/
-│   └── metadata/<nguồn>/ingestion_date=<ngày>/*.json
-├── logs/                         # gitignored
-└── .hadoop/bin/                  # gitignored, chỉ Windows — xem Bước 3
+│   ├── bronze-layer-report.md     # report kỹ thuật tầng Bronze
+│   ├── bronze-fixes.md            # lỗi Bronze phát hiện khi thử dựng Silver/Gold
+│   └── handout-silver-layer.md    # data dictionary Bronze cho người làm Silver
+├── spikes/  notebooks/  assets/
+├── data/                          # gitignored — tự sinh khi chạy
+│   ├── landing/ bronze/ metadata/
+├── logs/                          # gitignored
+└── .hadoop/bin/                   # gitignored, chỉ Windows — xem Bước 3
 ```
 
 ## 6. Cài đặt
@@ -201,13 +172,12 @@ Kết quả thật (2026-09-29): `2.821.799 → 70.557 dòng` sau lọc, gồm c
 |---|---|---|
 | Java | OpenJDK **17** | PySpark cần JRE kể cả khi chạy local mode |
 | Python | **3.11** hoặc 3.12 | xem [Lưu ý về phiên bản](#lưu-ý-về-phiên-bản) |
-| pyspark | **3.5.9** | bản cũ hơn crash trên Windows — xem Lưu ý |
+| pyspark | **3.5.9** | bản cũ hơn crash trên Windows, xem phần Lưu ý |
 | winutils | chỉ **Windows** | xem Bước 3 |
 
-> ⚠️ **Trên Windows: dùng PowerShell, KHÔNG dùng Git Bash.** Git Bash trộn lẫn dấu gạch
-> xuôi/ngược khi truyền `PATH` sang JVM, khiến Spark báo `UnsatisfiedLinkError:
-> NativeIO$Windows.access0` rất khó hiểu. Cùng một đoạn code chạy lỗi trong Git Bash nhưng
-> chạy tốt trong PowerShell.
+> ⚠️ **Trên Windows: dùng PowerShell, KHÔNG dùng Git Bash.** Git Bash trộn lẫn dấu gạch xuôi
+> và gạch ngược khi truyền `PATH` sang JVM, khiến Spark báo lỗi `UnsatisfiedLinkError:
+> NativeIO$Windows.access0` rất khó hiểu.
 
 ### Bước 1 — Java 17
 
@@ -223,12 +193,10 @@ brew install openjdk@17               # macOS
 ### Bước 2 — Virtual environment
 
 ```powershell
-# Windows
 py -3.11 -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 ```
 ```bash
-# Linux / macOS
 python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
@@ -237,9 +205,8 @@ python3.11 -m venv .venv
 
 > **Linux / macOS: bỏ qua bước này.**
 
-Spark trên Windows cần `winutils.exe` + `hadoop.dll` để thao tác quyền file — **kể cả khi
-chỉ ghi ra ổ đĩa local**. Thiếu chúng sẽ gặp `HADOOP_HOME and hadoop.home.dir are unset`.
-Hai file này tồn tại vì Windows không có tương đương POSIX cho `chmod`/`chown`.
+Spark trên Windows cần `winutils.exe` và `hadoop.dll` để thao tác quyền file, **kể cả khi chỉ
+ghi ra ổ đĩa local**. Thiếu hai file này sẽ gặp lỗi `HADOOP_HOME and hadoop.home.dir are unset`.
 
 ```powershell
 New-Item -ItemType Directory -Force .hadoop\bin | Out-Null
@@ -248,17 +215,11 @@ Invoke-WebRequest "$base/winutils.exe" -OutFile ".hadoop\bin\winutils.exe"
 Invoke-WebRequest "$base/hadoop.dll"   -OutFile ".hadoop\bin\hadoop.dll"
 ```
 
-Không cần set `HADOOP_HOME` thủ công — `ingestion/common/spark_session.py` tự trỏ vào
-`.hadoop/` khi khởi tạo SparkSession.
-
-Dùng bản **hadoop-3.3.6**. Bản 3.3.5 đòi thêm Visual C++ 2010 Redistributable
-(`exitCode=-1073741515`) nên tránh. Spark 3.5 đi kèm Hadoop 3.3.4 nhưng `cdarlint` không có
-đúng 3.3.4; 3.3.6 cùng nhánh minor nên chạy được.
-
-> `.hadoop/` bị gitignore có chủ đích: đây là binary do bên thứ ba build, không nên phân
-> phối lại kèm source code. Apache chưa phát hành bản build Windows chính thức
-> ([HADOOP-18135](https://issues.apache.org/jira/browse/HADOOP-18135) nhắm tới Hadoop 3.5.0,
-> chưa ra).
+- **Không cần set `HADOOP_HOME` thủ công:** `ingestion/common/spark_session.py` tự trỏ vào
+  `.hadoop/`.
+- **Dùng đúng bản hadoop-3.3.6:** bản 3.3.5 đòi thêm Visual C++ 2010 Redistributable.
+- **`.hadoop/` bị gitignore có chủ đích:** đây là binary do bên thứ ba build. Apache chưa có bản
+  build Windows chính thức ([HADOOP-18135](https://issues.apache.org/jira/browse/HADOOP-18135)).
 
 ### Bước 4 — Kiểm tra cài đặt
 
@@ -270,164 +231,112 @@ $env:PYTHONPATH = (Get-Location).Path
 PYTHONPATH=$(pwd) .venv/bin/python scripts/smoke_test.py
 ```
 
-Thành công khi thấy bảng 3 dòng `ok` và dòng `Smoke test OK`.
+Cài đặt thành công khi thấy bảng 3 dòng `ok` và dòng `Smoke test OK`.
 
-## 7. Chạy từng nguồn
-
-```powershell
-$env:PYTHONPATH = (Get-Location).Path
-
-.venv\Scripts\python.exe scripts\run_batch.py --source opendengue
-.venv\Scripts\python.exe scripts\run_batch.py --source news_rss
-.venv\Scripts\python.exe scripts\run_batch.py --source who_gho
-```
-
-Chạy nhiều nguồn trong một lệnh: lặp lại `--source`.
-
-Muốn tắt hẳn một nguồn thì sửa `enabled: false` trong `configs/sources.yaml`, **không sửa code**.
-
-## 8. Chạy toàn bộ
+## 7. Chạy ingestion
 
 ```powershell
-.venv\Scripts\python.exe scripts\run_batch.py
+.venv\Scripts\python.exe scripts\run_batch.py                          # mọi nguồn đang bật
+.venv\Scripts\python.exe scripts\run_batch.py --source news_rss        # một nguồn
+.venv\Scripts\python.exe scripts\check_bronze.py                       # đọc lại Bronze
 ```
 
-Kết quả (chạy thật ngày 2026-09-29):
+- Muốn chạy nhiều nguồn trong một lệnh, lặp lại `--source`.
+- Muốn tắt một nguồn, đặt `enabled: false` trong `configs/sources.yaml`; **không sửa code**.
+- **Mỗi nguồn chạy độc lập:** một nguồn lỗi không kéo theo nguồn khác.
+- Trong một nguồn tin tức, mỗi feed cũng chạy độc lập.
+- Exit code là 1 nếu có nguồn `FAILED`. `SKIPPED` (không có phiên bản mới) không tính là lỗi.
 
-```
-============================================================
-TONG KET INGESTION
-============================================================
-  opendengue  SUCCESS  70,557 dong
-  news_rss    SUCCESS  131 dong
-  who_gho     SUCCESS  1,232 dong
-  gdelt       SKIPPED  Bi rate-limit (HTTP 429) tu mang test, nghi do IP dung chung bi chan san.
-============================================================
-```
+Bronze sau khi chạy thật (29/09/2026):
 
-**Mỗi nguồn chạy độc lập.** Một nguồn chết không kéo theo nguồn khác, và dữ liệu nguồn đã
-nạp thành công **không bị xoá**. Exit code là 1 nếu có nguồn `FAILED` (`SKIPPED` không tính
-là lỗi).
+| Bảng | Số dòng | Số cột | Phân vùng |
+|---|---|---|---|
+| `opendengue` | 70.557 (đã lọc 11 nước) | 23 | `release` |
+| `who_gho` | 1.232 (9/11 nước) | 21 | `ingestion_date` |
+| `news_rss` | ~450 dòng mỗi lần fetch (11 feed); partition ngày gom mọi lần fetch trong ngày | 17 | `ingestion_date` |
+| `hdx_cod_ab` / `hdx_cod_ab_geometry` | 680 / 34 | 57 / 11 | `iso3` |
+| `hdx_cod_ps` | 14.200 | 84 | `_resource` |
+| `trends_th_weekly` / `trends_th_province` | 40.579 / 77 | 24 / 22 | `_release` |
+| `ph_doh` | 32.701 | 10 | `_version` |
+| `sg_nea` | 11 cụm | 19 | `ingestion_date` |
 
-### Lên lịch tự động (Windows Task Scheduler)
+### Lên lịch (Windows Task Scheduler)
 
 | Task | Lệnh | Tần suất |
 |---|---|---|
 | News | `run_batch.py --source news_rss` | 30 phút |
-| OpenDengue | `run_batch.py --source opendengue` | 1 lần/ngày |
-| WHO GHO | `run_batch.py --source who_gho` | 1 lần/ngày |
+| Nguồn theo ngày | `run_batch.py --source opendengue --source who_gho --source sg_nea` | 1 lần/ngày |
+| Nguồn theo tuần | `run_batch.py --source hdx_cod_ab --source hdx_cod_ps --source trends_th --source ph_doh` | 1 lần/tuần |
 
-Không dùng Airflow cho MVP — cài và học tốn nhiều thời gian nhưng không thêm giá trị cho
-phạm vi hiện tại.
+## 8. Metadata mỗi lần chạy
 
-## 9. Kết quả Bronze mong đợi
-
-```powershell
-.venv\Scripts\python.exe scripts\check_bronze.py
-```
-
-| Nguồn | Số dòng | Số cột | Cột gốc được giữ nguyên |
-|---|---|---|---|
-| opendengue | 70.557 (đã lọc SEA) | 20 | `adm_0_name`, `adm_1_name`, `adm_2_name`, `ISO_A0`, `calendar_start_date`, `dengue_total`, … |
-| news_rss | ~65 / lần fetch | 9 | `title`, `link`, `pubDate`, `source`, `description` |
-| who_gho | 1.232 (đã lọc SEA, 9/11 nước) | 20 | `COUNTRY`, `ISO3`, `START_DATE`, `CASES`, `WHO_REGION`, … |
-
-Số cột = cột gốc + 4 cột truy vết ở [mục 4](#4-nguyên-tắc-tầng-bronze).
-
-**opendengue dùng Spatial_extract, không phải National_extract.** Lý do và số liệu chi tiết
-xem [mục 4.1](#41-ngoại-lệ-lọc-phạm-vi-cho-opendengue). File gốc có 2.821.799 dòng toàn cầu;
-sau khi lọc còn lại xuống 70.557 dòng cho 11 nước SEA — bao gồm cả cấp quốc gia (`Admin0`,
-4.841 dòng) lẫn cấp tỉnh/huyện (`Admin1`/`Admin2`, 65.716 dòng, 329 tỉnh phân biệt).
-
-### Idempotency — chọn cách ghi đè phân vùng ngày
-
-Mỗi lần chạy, phân vùng của ngày được **dựng lại đầy đủ** từ toàn bộ file raw trong landing
-của ngày đó, rồi ghi đè bằng `replaceWhere`. Các ngày khác không bị động đến.
-
-Hệ quả: chạy lại bước nạp bao nhiêu lần cũng ra cùng kết quả, **không bao giờ nối thêm bản
-sao**. Riêng nguồn tin tức, mỗi lần *fetch mới* là một quan sát riêng nên số dòng tăng —
-đó là chủ ý, không phải lỗi trùng lặp. Việc gộp bài trùng là của Silver.
-
-## 10. Cấu trúc metadata
-
-Mỗi lần chạy — **thành công hay thất bại** — đều để lại một file
+Mỗi lần chạy, **thành công, thất bại hay bỏ qua**, đều để lại một file
 `data/metadata/<nguồn>/ingestion_date=<ngày>/<run_id>.json`:
 
 ```json
 {
   "source": "opendengue",
-  "source_type": "file_download",
-  "source_format": "csv",
   "source_url": "https://github.com/OpenDengue/master-repo/raw/main/data/releases/V1.3/Spatial_extract_V1_3.zip",
   "ingestion_date": "2026-09-29",
-  "ingestion_timestamp": "2026-09-29T04:26:10.428169+00:00",
   "run_id": "20260929T042610Z",
-  "ingestion_mode": "batch",
   "status": "success",
   "record_count": 70557,
   "raw_files": [{"path": "...", "bytes": 54687820, "sha256": "..."}],
-  "bytes_downloaded": 54687820,
   "source_version": "V1.3",
   "duration_seconds": 35.56,
-  "error_message": null
+  "error_message": null,
+  "warnings": []
 }
 ```
 
-Metadata mô tả **thao tác ingestion**, không phải schema nghiệp vụ của dữ liệu. Nó khác với
-các cột `_source` / `_ingested_at` / `_source_file` trong bảng Bronze — đó là lineage ở mức
-**từng dòng**. Cần cả hai.
+- **`warnings`** ghi những vấn đề không làm hỏng lần chạy, ví dụ một feed lỗi, một feed chạm
+  trần 100 bài, hoặc lý do SKIPPED.
+- **Metadata mô tả thao tác ingestion.** Các cột `_source`, `_fetched_at`… trong bảng là lineage
+  ở mức **từng dòng**. Cần cả hai.
 
-## 11. Hạn chế đã biết về truy cập nguồn
+## 9. Hạn chế đã biết về nguồn
 
-| Nguồn | Trạng thái | Chi tiết |
-|---|---|---|
-| **GDELT DOC 2.0** | Bị chặn | `HTTP 429` xác nhận lại 3 lần (29/9/2026), kể cả khi giãn 20s và xin 5 bản ghi/1 ngày — không phải lỗi gọi dồn dập, có vẻ là chặn IP mạng dùng chung. Giữ `spikes/test_gdelt_news.py` để thử lại từ mạng cá nhân. Đã thay bằng Google News RSS. |
-| **WHO GHO** | Đã tích hợp, phủ 9/11 nước | Chạy thật 29/9/2026: `1.232 dòng`, dữ liệu tới tuần 24/08/2026 (mới hơn OpenDengue rất nhiều — OpenDengue trễ ~17 tháng, WHO GHO trễ ~5 tuần). **Thiếu Philippines, Brunei** — đã kiểm tra kỹ, nguồn thực sự không có dữ liệu, không phải lỗi filter. Phát hiện thêm: `(ISO3, START_DATE, DATE_TYPE)` **không phải khoá duy nhất** — 35/1.232 dòng trùng khoá này, cần tìm thêm cột phân biệt (khả năng có chiều dữ liệu khác chưa profile tới) trước khi dùng làm khoá join ở Silver. |
-| **ProMED** | Không làm | Không có cơ chế truy cập công khai phù hợp trong thời gian còn lại. Không triển khai để tránh scrape endpoint không được phép. |
-| **HealthMap** | Không làm | Như trên. Không tạo implementation giả, không bypass authentication, không scrape API không công bố. |
-| **Google News RSS** | Hạn chế nội dung | Không có trường quốc gia hay địa điểm nào. Suy ra quốc gia từ tiêu đề chỉ đạt ~22% (đo bằng keyword matching) — là việc của Silver, và là giới hạn trên của độ chính xác, cần nói rõ trong report. |
-| **OpenDengue** | Không phải live data | Phát hành theo version (V1.3 ra 27/05/2025, số liệu chỉ tới 04/2025). Kiểm tra bản mới 1 lần/ngày là đủ. Dùng `Spatial_extract` (không phải `National_extract`) để có cấp tỉnh — xem [mục 4.1](#41-ngoại-lệ-lọc-phạm-vi-cho-opendengue). |
-| **Singapore NEA** | Đã gỡ khỏi pipeline | Từng có ingestion hoàn chỉnh (toạ độ thật, cấp cụm phố) nhưng chỉ phủ 1/11 nước SEA — không scale cho mục tiêu "phát hiện sớm cho các nước SEA". Lịch sử: xem git log. |
+| Nguồn | Hạn chế |
+|---|---|
+| **WHO GHO** | Không có Philippines, Brunei (nguồn thật sự không có, không phải lỗi filter). Có 5 dòng kỳ ở tương lai (2027–2029) và tháng gần nhất có thể chưa báo cáo đủ (IDN, TLS). Khoá dòng là `(ISO3, YEAR, DATE_TYPE, DATE_NUM)` |
+| **OpenDengue** | Phát hành theo phiên bản (V1.3, số liệu tới 04/2025). Số liệu cấp tỉnh của VN, PHL, KHM, LAO chỉ tới 2010. `RNE_iso_code` của PHL sai trên diện rộng. `UUID` là mã tài liệu, không phải khoá dòng |
+| **Google News RSS** | Không có trường địa điểm; nước và tỉnh phải suy ra ở Silver (bản thử ở `feat/silver-gold` gắn được nước cho 89% số bài, tỉnh cho ~11%). Locale km, lo, my trả 0 bài nên KH, LA, MM dùng tiếng Anh |
+| **HDX COD** | Không có Singapore, Brunei. Indonesia vẫn là bản 2020 (34 tỉnh). Việt Nam chỉ có 34 tỉnh mới; 63 tỉnh cũ lấy từ Natural Earth |
+| **Malaysia iDengue** | Không dùng: không có API, chỉ scrape được |
+| **GDELT DOC 2.0** | Tắt (`enabled: false`): bị `HTTP 429` từ mạng dùng chung. Đã thay bằng Google News RSS |
+| **ProMED, HealthMap** | Không dùng: không có cơ chế truy cập công khai phù hợp |
 
-## 12. Chạy test
+Các vấn đề dữ liệu Silver cần xử lý: [docs/handout-silver-layer.md](docs/handout-silver-layer.md), mục 3.
+
+## 10. Chạy test
 
 ```powershell
-$env:PYTHONPATH = (Get-Location).Path
-.venv\Scripts\python.exe -m pytest                        # toàn bộ
-.venv\Scripts\python.exe -m pytest -m "not integration"    # bỏ qua test cần JVM
+.venv\Scripts\python.exe -m pytest -q                         # toàn bộ (~2 phút trên Windows)
+.venv\Scripts\python.exe -m pytest -m "not integration"       # bỏ qua test cần JVM
 ```
 
 | Nhóm test | Nội dung |
 |---|---|
-| `test_config.py` | Đọc YAML, trộn defaults, bật/tắt nguồn, báo lỗi rõ ràng |
-| `test_paths.py` | Sinh đường dẫn, mốc thời gian, tách thư mục theo nguồn |
-| `test_metadata.py` | Đủ trường bắt buộc, checksum, duration, lần chạy thất bại |
-| `test_validation.py` | Nguồn không với tới được, file rỗng, file thiếu, landing rỗng |
-| `test_who_gho.py` | Hàm dựng OData `$filter` cho WHO GHO |
-| `test_integration_bronze.py` | OpenDengue: **nguồn → ingestion → Bronze → metadata** (kể cả filter SEA), chạy thật Spark + Delta |
-| `test_integration_who_gho.py` | WHO GHO: cùng chuỗi, chạy thật Spark + Delta |
+| `test_config`, `test_paths`, `test_metadata`, `test_validation`, `test_who_gho` | Hạ tầng ingestion |
+| `test_ingestion_units` | Parse RSS, chọn release OpenDengue, HDX, TRENDS, SG NEA, retry HTTP |
+| `test_integration_bronze`, `test_integration_who_gho` | Chuỗi nguồn → ingestion → Bronze → metadata, chạy thật Spark + Delta |
+| `test_integration_reruns` | Chạy lại sau lỗi giữa chừng, bảng Bronze cũ không tương thích, CSV có xuống dòng trong ô, SG NEA về 0 cụm |
 
-## 13. Ngoài phạm vi hiện tại
+## 11. Ngoài phạm vi
 
-Chưa triển khai, và **không** thêm vào nếu không có yêu cầu rõ ràng:
-
-Silver layer · Gold layer · schema chung · chuẩn hoá / làm sạch dữ liệu · dedup · NLP ·
-trích xuất thực thể · feature engineering · machine learning · dự đoán bùng phát · chấm
-điểm rủi ro · dashboard · Kafka · streaming · Snowflake · dbt · Dagster · Airflow · LLM ·
-vector database · data warehouse.
-
-Silver là bước kế tiếp theo feedback TA, nhưng **chưa có dòng code nào** trong repo này.
+Chưa triển khai trong repo này: Silver, Gold, dashboard (bản thử ở nhánh `feat/silver-gold`),
+machine learning, dự báo bùng phát, NLP, Kafka, streaming, Airflow, dbt, Dagster, Snowflake,
+LLM, vector database.
 
 ## Lưu ý về phiên bản
 
 **`pyspark` phải là 3.5.9.** Các bản 3.5.x trước đó dính
-[SPARK-53759](https://issues.apache.org/jira/browse/SPARK-53759): `createDataFrame()` làm
-Python worker crash. Bug này **chỉ xảy ra trên Windows** + Python 3.12/3.13 + local mode.
+[SPARK-53759](https://issues.apache.org/jira/browse/SPARK-53759): `createDataFrame()` làm Python
+worker crash. Bug này chỉ xảy ra trên Windows + Python 3.12/3.13 + local mode.
 
 **Cảnh báo vô hại trong log:**
-
-- *Windows* — cuối mỗi job: `ERROR ShutdownHookManager: Exception while deleting Spark temp
-  dir: ... antlr4-runtime.jar`. Do Windows còn giữ lock file `.jar` lúc JVM tắt. Không ảnh
-  hưởng dữ liệu — cứ nhìn exit code và bảng tổng kết.
-- *Linux / macOS* — đầu mỗi job: `WARN NativeCodeLoader: Unable to load native-hadoop
-  library`. Hadoop có thư viện native tuỳ chọn; không có thì Spark dùng bản Java thuần.
+- *Windows*, cuối mỗi job: `ERROR ShutdownHookManager: Exception while deleting Spark temp dir:
+  ... antlr4-runtime.jar`. Nguyên nhân là Windows còn giữ khoá file `.jar` lúc JVM tắt. Không
+  ảnh hưởng dữ liệu; cứ nhìn exit code và bảng tổng kết.
+- *Linux / macOS*, đầu mỗi job: `WARN NativeCodeLoader: Unable to load native-hadoop library`.
+  Không có thư viện native thì Spark dùng bản Java thuần.

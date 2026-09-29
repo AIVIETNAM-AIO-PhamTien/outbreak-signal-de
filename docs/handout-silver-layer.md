@@ -1,167 +1,296 @@
 # Handout: Bàn giao Bronze → Silver — OutbreakSignal DE
 
-Tài liệu này viết cho người tiếp theo bắt đầu tầng **Silver**. Mục đích: hiểu tầng Bronze
-đã làm gì mà không cần đọc lại toàn bộ code, và có sẵn bảng mô tả dữ liệu (tên cột, kiểu,
-ý nghĩa) của cả 3 bảng Bronze để bắt tay vào việc luôn.
+Tài liệu cho người bắt đầu tầng **Silver**. Mục đích:
+- hiểu tầng Bronze đã làm gì mà không cần đọc lại toàn bộ code;
+- có sẵn bảng mô tả dữ liệu (tên cột, kiểu, ý nghĩa) của mọi bảng Bronze.
 
-Tài liệu kỹ thuật đầy đủ hơn: [`docs/bronze-layer-report.md`](bronze-layer-report.md) (report
-chi tiết) và [`README.md`](../README.md) (hướng dẫn cài đặt, chạy, kiến trúc).
+Tài liệu liên quan:
+- [`README.md`](../README.md): cài đặt, kiến trúc, cách chạy.
+- [`docs/bronze-layer-report.md`](bronze-layer-report.md): report kỹ thuật.
+- [`docs/bronze-fixes.md`](bronze-fixes.md): các lỗi Bronze đã sửa (29–30/09/2026) và vấn đề của
+  chính nguồn dữ liệu.
+
+Một bản Silver/Gold thử độ khả thi đã được dựng trên nhánh `feat/silver-gold` (tài liệu
+`docs/silver-handover.md` trên nhánh đó). Người làm Silver nên đọc qua để tham khảo cách xử lý
+các vấn đề ở mục 3.
 
 ---
 
 ## 1. Bronze đã làm gì (tóm tắt 1 phút)
 
-- **Mục tiêu dự án**: phát hiện sớm khu vực có nguy cơ bùng dịch sốt xuất huyết ở Đông Nam Á.
-- **3 nguồn đã ingest**, mỗi nguồn 1 bảng Delta riêng, **không join, không merge** ở Bronze:
-  `opendengue`, `news_rss`, `who_gho`. (Singapore NEA từng có ingestion hoàn chỉnh nhưng đã
-  gỡ khỏi pipeline — chỉ phủ 1/11 nước SEA, không scale cho mục tiêu số nhiều "các nước SEA".
-  Lịch sử: xem git log.)
-- **Kỹ thuật**: batch ingestion (không phải streaming/micro-batch). Python thuần tải dữ
-  liệu về `data/landing/` (bản gốc, y nguyên byte-for-byte), PySpark đọc lại, thêm 4 cột
-  lineage, ghi ra Delta ở `data/bronze/<nguồn>/ingestion_date=<ngày>/`.
-- **Nguyên tắc Bronze**: giữ nguyên trạng dữ liệu nguồn — không đổi tên cột, không ép kiểu,
-  không chuẩn hoá giá trị, không xoá trùng. Tất cả việc làm sạch/chuẩn hoá là việc của Silver.
-- **Một ngoại lệ duy nhất**: `opendengue` bị lọc còn 11 nước SEA trước khi ghi Bronze (từ
-  2.821.799 dòng toàn cầu xuống 70.557 dòng) — đây là chọn **phạm vi thu thập**, không phải
-  biến đổi giá trị. Landing vẫn giữ 100% file gốc chưa lọc. Chi tiết: report mục 6.3.
-- **Idempotency**: mỗi lần chạy dựng lại toàn bộ phân vùng `ingestion_date` của ngày đó rồi
-  ghi đè bằng `replaceWhere` — chạy lại bao nhiêu lần cũng ra cùng kết quả, không nhân đôi.
+- **Mục tiêu dự án:** phát hiện sớm khu vực có nguy cơ bùng dịch sốt xuất huyết ở 11 nước Đông
+  Nam Á.
+- **Các nguồn:** 8 nguồn, 10 bảng Delta. Mỗi nguồn ghi bảng riêng; Bronze **không join, không
+  merge**.
+- **Kỹ thuật:** batch ingestion, không phải streaming.
+  1. Python thuần tải dữ liệu về `data/landing/` (bản gốc, y nguyên byte-for-byte).
+  2. PySpark đọc lại, thêm cột lineage, ghi Delta vào `data/bronze/<bảng>/`.
+- **Nguyên tắc Bronze:** giữ nguyên trạng dữ liệu nguồn.
+  - Không đổi tên cột, không chuẩn hoá giá trị, không xoá trùng.
+  - **Mọi cột đều là `string`**, kể cả cột số. Ép kiểu là việc của Silver.
+  - Lý do: để Spark tự suy kiểu thì cột đang toàn null sẽ thành string, hôm nào có số sẽ đổi
+    kiểu và làm vỡ bước ghi Delta.
+- **Ngoại lệ lọc phạm vi:** `opendengue` và `hdx_cod_ps` lọc còn 11 nước trước khi ghi Bronze.
+  Đây là chọn **phạm vi thu thập**, không phải biến đổi giá trị; landing vẫn giữ 100% file gốc.
+- **Idempotency**, chia theo kiểu nguồn:
+  - **Theo ngày** (`news_rss`, `who_gho`, `sg_nea`): dựng lại partition `ingestion_date` từ mọi
+    file landing của ngày đó, ghi đè bằng `replaceWhere`.
+  - **Theo phiên bản** (`opendengue`, `hdx_*`, `trends_th_*`, `ph_doh`): partition theo phiên
+    bản. Nếu phiên bản và dấu vân tay file đã có trong Bronze thì **bỏ qua**, không tải lại.
 
 ## 2. Vai trò từng nguồn cho Silver
 
-Xét đúng mục tiêu "phát hiện sớm cho SEA" (không phải chỉ thống kê lịch sử):
-
-| Nguồn | Vai trò cho Silver | Vì sao |
+| Bảng | Vai trò | Ghi chú |
 |---|---|---|
-| **OpenDengue** | Ground truth nền | Phủ đủ 11/11 nước, lịch sử dài, nhưng trễ ~17 tháng — dùng để train/backtest, không dùng cảnh báo hiện tại |
-| **WHO GHO** | Ground truth đối chiếu | Trễ chỉ ~5 tuần, mới hơn OpenDengue nhiều — dùng đối chiếu/hiệu chỉnh, dù thiếu Philippines + Brunei |
-| **Google News RSS** | Tín hiệu sớm | Nguồn **duy nhất** gần real-time — không có nguồn này thì mất chữ "sớm" trong early-warning, dù chất lượng suy luận địa điểm còn yếu (~22-23% recall) |
+| `opendengue` | Số ca lịch sử, cấp quốc gia và tỉnh | Phủ 11/11 nước, từ 1960, nhưng trễ ~17 tháng. Số liệu cấp tỉnh của VN/PHL/KHM/LAO chỉ tới 2010 |
+| `who_gho` | Số ca **gần đây**, cấp quốc gia | Trễ ~5 tuần. Không có Philippines, Brunei |
+| `news_rss` | Tín hiệu sớm | Nguồn **duy nhất** gần real-time. 11 feed theo nước, ngôn ngữ bản xứ |
+| `hdx_cod_ab` (+ `_geometry`) | Danh mục đơn vị hành chính (P-code) | Khoá để quy mọi nguồn cấp tỉnh về cùng một bộ mã |
+| `hdx_cod_ps` | Dân số theo đơn vị | Mẫu số cho ca / 100.000 dân |
+| `trends_th_weekly`, `trends_th_province` | Số ca Thái Lan, tuần × 77 tỉnh, 2016–2025 | Nguồn cấp tỉnh **gần đây duy nhất** |
+| `ph_doh` | Số ca Philippines, tuần × tỉnh | Tháng đầy đủ cuối cùng 12/2020 |
+| `sg_nea` | Cụm dịch Singapore đang hoạt động | Có polygon, cấp cụm phố |
 
 ## 3. Vấn đề đã biết mà Silver cần xử lý
 
-Đây là danh sách quan trọng nhất của tài liệu này — mỗi dòng là một quyết định thiết kế
-Silver phải đưa ra, không phải bug cần "sửa":
+Mỗi dòng là một quyết định thiết kế Silver phải đưa ra, không phải bug của Bronze. Các con số đo
+trên dữ liệu thật ngày 29/09/2026.
 
-1. **Không có khoá chung để join 3 nguồn.** `opendengue` dùng tên nước UN (`VIET NAM`),
-   `who_gho` dùng `ISO3`, `news_rss` không có trường quốc gia (phải tự suy luận). → Cần bước
-   **chuẩn hoá khoá địa lý** (khuyến nghị: map hết về ISO3) trước khi so sánh/join bất cứ gì.
-2. **Độ phân giải không gian khác cấp.** OpenDengue có tỉnh/huyện, WHO GHO chỉ quốc gia,
-   News RSS không có. So sánh chéo nguồn chỉ làm được ở cấp quốc gia (cấp thấp nhất chung).
-3. **Độ phân giải thời gian không đồng nhất, kể cả trong 1 nguồn.** `opendengue.T_res`
-   (Week/Month/Year) đổi theo giai đoạn của cùng một nước (VD: Việt Nam chỉ có `Year` giai
-   đoạn 1960–1994, `Month` giai đoạn ~1995–2015, `Week` từ 2016). `who_gho.DATE_TYPE` cũng
-   có 3 loại (`month`/`isoweek`/`epiweek`) trộn lẫn. → Cần chuẩn hoá về 1 đơn vị thời gian
-   chung trước khi ghép chuỗi thời gian.
-4. **`who_gho`: khoá `(ISO3, START_DATE, DATE_TYPE)` không phải khoá duy nhất** — 35/1.232
-   dòng trùng khoá này (verify 29/9/2026). Có khả năng còn một chiều dữ liệu khác chưa được
-   profile (nhóm tuổi, giới tính, biến thể chỉ số...). Cần tìm cột phân biệt còn thiếu
-   trước khi dùng bộ 3 cột này làm khoá join.
-5. **`who_gho`: 2 dòng có ngày trong tương lai** (`MYS` = `2029-06-03`, `SGP` = `2028-06-04`)
-   — lỗi từ phía nguồn WHO, Bronze giữ nguyên theo đúng nguyên tắc. Silver cần lọc/gắn cờ.
-6. **`who_gho`: nhiều cột phụ gần như trống** — `POPULATION` 100% null, `SEVERE_CASES`
-   97,2% null, `SERO_1..4` 92,9% null mỗi cột, `CONFIRMED_CASES` 70,2% null. Chỉ `CASES`
-   sạch 100% — nên dùng làm chỉ số chính, các cột khác chỉ bổ sung khi có.
-7. **`news_rss`: không có trường quốc gia/địa điểm nào.** Suy luận bằng keyword matching
-   chỉ đạt ~22-23% recall — là giới hạn trên hiện tại, không phải lỗi code. Cần cải thiện
-   bằng NER/geocoding thật nếu muốn dùng làm input mô hình.
-8. **`news_rss`: mỗi lần fetch là một quan sát riêng, cố ý không dedup ở Bronze** — cùng
-   một bài có thể xuất hiện lặp ở nhiều lần fetch (49% trùng theo `link` trong một lô test).
-   Dedup theo `link` là việc của Silver.
-9. **`news_rss.source` (tên nhà xuất bản, từ tag RSS) dễ nhầm với cột lineage `_source`**
-   (tên nguồn ingest, luôn là chuỗi `"news_rss"`) — để ý khi viết code Silver.
+1. **Không có khoá địa lý chung giữa các nguồn.**
+   - `opendengue` dùng tên nước UN (`VIET NAM`); `who_gho` dùng `ISO3`.
+   - `news_rss` chỉ có `feed_country`, tức nước của feed chứ không phải nước bài báo nói tới.
+   - Cấp tỉnh: `opendengue` có `RNE_iso_code` (ISO 3166-2 theo Natural Earth); TRENDS và COD
+     dùng P-code.
 
-## 4. Data dictionary — 3 bảng Bronze
+   → Cần chuẩn hoá khoá: cấp nước về ISO3, cấp tỉnh về P-code của COD.
+2. **Thời gian không đồng nhất, kể cả trong cùng một nguồn.**
+   - `opendengue.T_res` là Week, Month hoặc Year, và đổi theo giai đoạn trong cùng một nước.
+   - `who_gho.DATE_TYPE` là `month`, `isoweek` hoặc `epiweek`.
+   - Có 60 trường hợp cùng địa điểm và cùng tháng có nhiều chuỗi song song.
 
-**4 cột lineage giống nhau ở cả 3 bảng** (thêm bởi `ingestion/common/bronze.py`, không có
-trong dữ liệu gốc):
+   → Mỗi (nguồn, địa điểm, tháng) phải chọn đúng một chuỗi, nếu không sẽ **cộng trùng**.
+3. **`opendengue.UUID` không phải khoá dòng.** Chỉ có 234 giá trị cho 70.557 dòng; đây là mã
+   tài liệu nguồn.
+4. **`opendengue`: Philippines có `adm_1` là vùng, `adm_2` là tỉnh.** `RNE_iso_code` của
+   Philippines sai trên diện rộng (51 địa danh có mã không khớp tên), nên cần nối cả theo tên.
+5. **`who_gho`: khoá dòng là `(ISO3, YEAR, DATE_TYPE, DATE_NUM)`.** Bộ `(ISO3, START_DATE,
+   DATE_TYPE)` không duy nhất.
+   - `START_DATE` trống ở 36 dòng (IDN 2007–2009); suy lại được từ `YEAR` + `DATE_NUM`.
+   - Indonesia xuất hiện ở 2 WHO region.
+6. **`who_gho` có lỗi từ phía nguồn**, Bronze giữ nguyên:
+   - 5 dòng có kỳ ở **tương lai** (MYS, SGP, năm 2027–2029);
+   - 1 dòng `CONFIRMED_CASES` > `CASES` (KHM 2025);
+   - tháng gần nhất có thể chưa báo cáo đủ (IDN: T6 9.264 → T7 3.514 → T8 67 ca).
+7. **`who_gho`: nhiều cột gần như trống.**
+   - `POPULATION` 100% null, `SEVERE_CASES` 97,2%, `SERO_1..4` ~92,9%, `CONFIRMED_CASES` 70,2%.
+   - `CASES` không null ở dòng nào, nên dùng làm chỉ số chính.
+8. **`news_rss`: mỗi lần fetch là một quan sát riêng.** Bài lặp giữa các lần fetch là cố ý.
+   - Dedup theo `guid`; dòng cũ chưa có `guid` thì dùng `link`.
+   - Thời điểm thấy bài lấy từ `_fetched_at`, **không** lấy từ `_ingested_at` (bị ghi lại khi
+     dựng lại partition).
+9. **`news_rss`: nước của bài.** Bài trên trang đa ngôn ngữ (vd Vietnam.vn) có thể nằm trong
+   feed của nước khác. Nên lấy hợp của `feed_country` và nước được nhắc trong bài; bản thử đạt
+   89% số bài gắn được nước.
+10. **`news_rss`: độ phủ không đều giữa các feed.** Ở lần fetch 29/09/2026 (UTC):
+    - Brunei và Lào trả **0 bài**, Timor-Leste 1 bài, Campuchia 3 bài;
+    - Indonesia, Philippines, Singapore chạm **trần 100 bài** của Google, nên có thể bị cắt
+      bớt. Trường hợp này được ghi vào `warnings` của metadata.
+
+    Số bài theo nước không so trực tiếp được với nhau.
+11. **`news_rss.source` là tên nhà xuất bản**, dễ nhầm với cột lineage `_source` (luôn là
+    `"news_rss"`).
+12. **Việt Nam sáp nhập 63 → 34 tỉnh từ 01/07/2025.**
+    - `hdx_cod_ab` chỉ còn 34 tỉnh mới, trong khi `hdx_cod_ps` và `opendengue` dùng 63 tỉnh cũ.
+    - Cần bảng đơn vị có thời gian hiệu lực (SCD2) và bảng nối cũ → mới.
+13. **`hdx_cod_ab`:** Indonesia là bản 2020 (34 tỉnh, chưa có 4 tỉnh Papua mới). Không có
+    Singapore, Brunei. P-code của Philippines lệch giữa `hdx_cod_ab` và `hdx_cod_ps`.
+14. **`hdx_cod_ps` có hai dạng bảng trong cùng một bảng Delta**, phân biệt bằng `_resource`:
+    - dạng dài (`Gender`, `Age_range`, `Population`);
+    - dạng rộng của PHL cấp 2 (`T_TL`, `F_00_04`…).
+15. **`ph_doh`:** thành phố lớn (Makati, Baguio…) được ghi tách riêng khỏi tỉnh, khoảng 27% số
+    dòng.
+
+## 4. Data dictionary
+
+### 4.0 Cột lineage (Bronze thêm vào, không có trong dữ liệu gốc)
+
+| Cột | Kiểu | Có ở | Mô tả |
+|---|---|---|---|
+| `_source` | string | mọi bảng | Tên nguồn ingest |
+| `_ingested_at` | string | mọi bảng | Thời điểm PySpark ghi dòng vào Bronze (ISO-8601 UTC). **Bị ghi lại** mỗi lần dựng lại partition |
+| `_fetched_at` | string | `news_rss`, `who_gho`, `sg_nea`, `opendengue` | Thời điểm **gọi API / tải file** (ISO-8601 UTC), ghi ngay trong file landing. Không bị ghi đè |
+| `_source_file` | string | mọi bảng | File landing mà dòng này đọc ra, tính từ thư mục `landing/` (vd `news_rss/2026-09-29/…jsonl`) |
+| `ingestion_date` | string | mọi bảng | Ngày nạp `YYYY-MM-DD`. Là cột phân vùng của các nguồn theo ngày |
+| `release`, `_file_sha` | string | `opendengue` | Tên release (vd `V1.3`, là cột phân vùng) và git blob sha của file zip |
+| `_version` | string | `hdx_*`, `ph_doh` | `last_modified` của resource trên HDX (cột phân vùng của `ph_doh`) |
+| `_release`, `_file_md5` | string | `trends_th_*` | Record id Zenodo (cột phân vùng) và md5 của file |
+
+### 4.1 `opendengue` (Spatial_extract, đã lọc 11 nước), 23 cột
 
 | Cột | Kiểu | Mô tả |
 |---|---|---|
-| `_source` | string | Tên nguồn ingest, cố định theo bảng (`"opendengue"`, `"news_rss"`, `"who_gho"`) |
-| `_ingested_at` | string | Thời điểm PySpark ghi dòng này vào Bronze, ISO-8601 UTC |
-| `_source_file` | string | Tên file raw trong `data/landing/` mà dòng này đọc ra từ đó |
-| `ingestion_date` | string | Cột phân vùng Delta, dạng `YYYY-MM-DD` |
-
-Phần dưới là các cột **gốc từ nguồn** — giữ nguyên tên, chưa qua chuẩn hoá.
-
-### 4.1 `opendengue` (Spatial_extract, đã lọc 11 nước SEA)
-
-| Cột | Kiểu | Mô tả |
-|---|---|---|
-| `adm_0_name` | string | Tên quốc gia (UN name, viết hoa, VD `"VIET NAM"` có dấu cách) |
-| `adm_1_name` | string | Tên tỉnh/bang (Admin cấp 1) |
-| `adm_2_name` | string | Tên huyện/quận (Admin cấp 2) |
-| `full_name` | string | Tên đầy đủ ghép các cấp hành chính lại với nhau |
+| `adm_0_name` | string | Tên quốc gia (UN name, viết hoa, vd `"VIET NAM"` có dấu cách) |
+| `adm_1_name` | string | Đơn vị cấp 1 (tỉnh; với Philippines là **vùng**) |
+| `adm_2_name` | string | Đơn vị cấp 2 (huyện; với Philippines là **tỉnh**) |
+| `full_name` | string | Tên đầy đủ ghép các cấp hành chính |
 | `ISO_A0` | string | Mã ISO Alpha-3 của quốc gia |
-| `FAO_GAUL_code` | string | Mã đơn vị hành chính theo FAO GAUL (Global Administrative Unit Layers) |
-| `RNE_iso_code` | string | Mã tham chiếu đơn vị hành chính nội bộ của OpenDengue (chưa xác minh kỹ ngữ nghĩa — cần dùng thì kiểm tra thêm tài liệu OpenDengue gốc) |
-| `IBGE_code` | string | Mã hành chính IBGE (chỉ áp dụng cho Brazil — với SEA luôn 1 giá trị cố định/rỗng) |
-| `calendar_start_date` | string | Ngày bắt đầu kỳ báo cáo |
-| `calendar_end_date` | string | Ngày kết thúc kỳ báo cáo |
+| `FAO_GAUL_code` | string | Mã đơn vị theo FAO GAUL |
+| `RNE_iso_code` | string | Mã ISO 3166-2 theo `rnaturalearth` (bài báo gốc OpenDengue, Sci Data 2024). Với Philippines sai nhiều, xem mục 3.4 |
+| `IBGE_code` | string | Mã hành chính của Brazil; với Đông Nam Á không có ý nghĩa |
+| `calendar_start_date`, `calendar_end_date` | string | Ngày bắt đầu và kết thúc kỳ báo cáo |
 | `Year` | string | Năm của kỳ báo cáo |
-| `dengue_total` | string | Tổng số ca dengue trong kỳ + khu vực này (kiểu string — Bronze không ép kiểu, cần cast khi qua Silver) |
-| `case_definition_standardised` | string | Định nghĩa ca bệnh đã chuẩn hoá do nước báo cáo dùng (quan sát được 3 loại) |
-| `S_res` | string | Độ phân giải không gian của dòng: `Admin0` (quốc gia) / `Admin1` (tỉnh) / `Admin2` (huyện) |
-| `T_res` | string | Độ phân giải thời gian của dòng: `Week` / `Month` / `Year` — **đổi theo giai đoạn trong cùng 1 nước**, xem mục 3.3 |
-| `UUID` | string | Định danh duy nhất của bản ghi, do OpenDengue cấp |
+| `dengue_total` | string | Tổng số ca trong kỳ và khu vực |
+| `case_definition_standardised` | string | Định nghĩa ca (`Total`, `Suspected and confirmed`, `Confirmed`) |
+| `S_res` | string | Độ phân giải không gian: `Admin0` / `Admin1` / `Admin2` |
+| `T_res` | string | Độ phân giải thời gian: `Week` / `Month` / `Year`, đổi theo giai đoạn |
+| `UUID` | string | Mã **tài liệu nguồn** của bản ghi, không phải khoá dòng (mục 3.3) |
+| + lineage | | `_source`, `_ingested_at`, `_source_file`, `ingestion_date`, `_fetched_at`, `release`, `_file_sha` |
 
-### 4.2 `news_rss` (Google News RSS)
-
-| Cột | Kiểu | Mô tả |
-|---|---|---|
-| `title` | string | Tiêu đề bài báo |
-| `link` | string | URL bài báo — gần nhất với khoá duy nhất của 1 bài (dùng để dedup ở Silver) |
-| `pubDate` | string | Thời điểm xuất bản theo RSS báo cáo (dạng chuỗi RFC-822) |
-| `source` | string | Tên đơn vị xuất bản (VD `"Reuters"`) — **khác với cột lineage `_source`**, xem mục 3.9 |
-| `description` | string | Đoạn tóm tắt/snippet của bài, có thể chứa HTML |
-
-Không có trường quốc gia/địa điểm nào — xem mục 3.7.
-
-### 4.3 `who_gho` (WHO GHO xMart, ARBOV Dengue, đã lọc 11 nước SEA ở tầng request)
+### 4.2 `news_rss` (Google News RSS), 17 cột
 
 | Cột | Kiểu | Mô tả |
 |---|---|---|
-| `COUNTRY` | string | Tên quốc gia đầy đủ theo WHO |
-| `ISO3` | string | Mã ISO Alpha-3 quốc gia |
-| `YEAR` | bigint | Năm của kỳ báo cáo |
-| `DATE_TYPE` | string | Loại độ phân giải thời gian của kỳ báo cáo: `month` / `isoweek` / `epiweek` |
-| `DATE_NUM` | bigint | Số thứ tự kỳ báo cáo trong năm (tháng thứ mấy / tuần thứ mấy — cách đánh số chính xác chưa xác minh kỹ, phụ thuộc `DATE_TYPE`) |
-| `START_DATE` | string | Ngày bắt đầu kỳ báo cáo |
-| `CASES` | bigint | Tổng số ca dengue trong kỳ — **cột sạch nhất (0% null), nên dùng làm chỉ số chính** |
-| `CONFIRMED_CASES` | bigint | Số ca đã xác nhận bằng xét nghiệm (tập con của `CASES`) — 70,2% null |
-| `DEATHS` | bigint | Số ca tử vong do dengue trong kỳ — 28,4% null |
-| `SEVERE_CASES` | bigint | Số ca dengue nặng (theo phân loại WHO) — 97,2% null |
-| `SERO_1` .. `SERO_4` | string | Chỉ số liên quan huyết thanh (serotype) DENV-1 đến DENV-4 — ý nghĩa mã hoá cụ thể chưa xác minh kỹ, ~92,9% null mỗi cột |
-| `POPULATION` | string | Dân số làm mẫu số tính tỷ lệ — hiện 100% null trong dữ liệu đã lấy |
-| `WHO_REGION` | string | Khu vực WHO phân loại (VD `SEARO`, `WPRO`) |
+| `guid` | string | Định danh bài của RSS. **Khoá tự nhiên**, dùng để dedup |
+| `title` | string | Tiêu đề (thường có dạng "… - Tên báo") |
+| `link` | string | URL bài qua Google News |
+| `pubDate` | string | Thời điểm đăng, chuỗi RFC-822 (vd `Mon, 29 Sep 2026 07:00:00 GMT`) |
+| `source` | string | Tên nhà xuất bản. **Khác** cột lineage `_source` |
+| `source_url` | string | URL trang chủ nhà xuất bản (thuộc tính `url` của tag `<source>`) |
+| `description` | string | Đoạn tóm tắt, có chứa HTML |
+| `raw_payload` | string | XML gốc của cả `<item>`, dùng để lấy lại trường chưa được tách ra |
+| `feed_country` | string | ISO3 của feed đã trả về bài này |
+| `feed_hl`, `feed_gl` | string | Ngôn ngữ và vùng của feed (vd `vi`, `VN`) |
+| `feed_query` | string | Truy vấn đã gửi (vd `sốt xuất huyết when:7d`) |
+| + lineage | | `_source`, `_ingested_at`, `_source_file`, `ingestion_date`, `_fetched_at` |
 
-Đã xác nhận thiếu dữ liệu cho Philippines và Brunei (không phải lỗi filter). Xem thêm mục 3.4/3.5/3.6.
+64 dòng trong partition `2026-09-29` không có `guid`, `_fetched_at` và `feed_*`. Chúng đến từ file
+`google_news_20260929T142729Z.jsonl`, tải trước khi Bronze được sửa để giữ các trường này. Với
+những dòng đó, dedup theo `link`, còn thời điểm lấy từ run_id trong tên file.
 
-## 5. Muốn có dữ liệu Bronze mới nhất để bắt đầu Silver?
+### 4.3 `who_gho` (WHO GHO xMart, ARBOV Dengue, lọc 11 nước ở tầng request), 21 cột
+
+| Cột | Kiểu | Mô tả |
+|---|---|---|
+| `COUNTRY` | string | Tên quốc gia theo WHO |
+| `ISO3` | string | Mã ISO Alpha-3 |
+| `WHO_REGION` | string | Khu vực WHO (`SEARO`, `WPRO`) |
+| `YEAR` | string | Năm của kỳ báo cáo |
+| `DATE_TYPE` | string | `month` / `isoweek` / `epiweek` |
+| `DATE_NUM` | string | Số thứ tự tháng hoặc tuần trong năm, theo `DATE_TYPE`. Đã đối chiếu: khớp `START_DATE` ở mọi dòng có `START_DATE` |
+| `START_DATE` | string | Ngày bắt đầu kỳ. Trống ở 36 dòng |
+| `CASES` | string | Tổng số ca. Không null ở dòng nào; chỉ số chính |
+| `CONFIRMED_CASES` | string | Số ca xác nhận xét nghiệm, 70,2% null |
+| `DEATHS` | string | Số ca tử vong, 28,4% null |
+| `SEVERE_CASES` | string | Số ca nặng, 97,2% null |
+| `SERO_1` .. `SERO_4` | string | Thông tin serotype DENV-1..4, ~92,9% null mỗi cột |
+| `POPULATION` | string | Dân số, 100% null |
+| + lineage | | `_source`, `_ingested_at`, `_source_file`, `ingestion_date`, `_fetched_at` |
+
+### 4.4 `hdx_cod_ab` (đơn vị hành chính COD, 9 nước), 57 cột, phân vùng `iso3`
+
+Mỗi dòng là một đơn vị hành chính, lấy từ một sheet của file XLSX. Cột `_sheet` cho biết sheet
+nguồn (`admin1`, `admin2`, `adminpoints`…); các cột khác nhau theo cấp.
+
+| Cột | Kiểu | Mô tả |
+|---|---|---|
+| `iso3`, `_sheet`, `admin_level` | string | Nước, sheet nguồn, cấp hành chính (của dòng `adminpoints`) |
+| `adm0_pcode` … `adm5_pcode` | string | P-code từng cấp: khoá đơn vị |
+| `adm{n}_name` | string | Tên tiếng Anh/Latin |
+| `adm{n}_name1..3`, `lang1..3` | string | Tên bằng ngôn ngữ bản xứ và mã ngôn ngữ tương ứng |
+| `center_lat`, `center_lon` | string | Toạ độ tâm (sheet cấp hành chính) |
+| `x_coord`, `y_coord`, `name*` | string | Toạ độ và tên của điểm đại diện (sheet `adminpoints`) |
+| `valid_on`, `valid_to`, `version`, `area_sqkm` | string | Ngày hiệu lực, phiên bản COD, diện tích |
+| + lineage | | `_source`, `_ingested_at`, `_source_file`, `ingestion_date`, `_version` |
+
+`hdx_cod_ab_geometry` (11 cột) chỉ có Việt Nam: 34 tỉnh mới, gồm `adm1_pcode`, `adm1_name`,
+`geometry` (GeoJSON dạng chuỗi), `raw_payload` và `valid_on`.
+
+### 4.5 `hdx_cod_ps` (dân số COD), 84 cột, phân vùng `_resource`
+
+| Cột | Kiểu | Mô tả |
+|---|---|---|
+| `_resource`, `_source_resource`, `_admin_level` | string | Resource HDX nguồn (bảng toàn cầu cấp 1, hoặc PHL cấp 2) và cấp hành chính |
+| `ISO3`, `ADM1_PCODE`, `ADM1_NAME` … `ADM4_*` | string | Mã và tên đơn vị (dạng dài) |
+| `Population_group`, `Gender`, `Age_range`, `Age_min`, `Age_max` | string | Nhóm dân số. Tổng dân số lấy ở dòng `Gender = "all"` và `Age_range = "all"` |
+| `Population`, `Reference_year`, `Source`, `Contributor` | string | Giá trị dân số, năm tham chiếu, nguồn |
+| `ADM0_*`, `ADM2_*`, `year`, `T_TL`, `F_TL`, `M_TL`, `{F,M,T}_{tuổi}` | string | Dạng rộng của PHL cấp 2: tổng (`T_TL`), theo giới và nhóm tuổi |
+| + lineage | | `_source`, `_ingested_at`, `_source_file`, `ingestion_date`, `_version` |
+
+### 4.6 `trends_th_weekly` (24 cột) và `trends_th_province` (22 cột)
+
+| Cột | Kiểu | Mô tả |
+|---|---|---|
+| `p_code`, `province`, `health_region`, `country` | string | P-code (khớp COD), tên tỉnh, vùng y tế |
+| `year`, `month`, `epi_week`, `week_start`, `week_end` | string | Kỳ báo cáo theo tuần dịch tễ |
+| `dengue_fever_df`, `dengue_haemorrhagic_fever_dhf`, `dengue_shock_syndrome_dss`, `dengue_total` | string | Số ca theo thể bệnh và tổng |
+| `dengue_rate_per_100_000` | string | Tỉ lệ trên 100.000 dân do nguồn tính |
+| `chikungunya*`, `hfmd*` | string | Bệnh khác cùng file, ngoài phạm vi dengue |
+| `centroid_latitude`, `centroid_longitude`, `area_km`, `population_2016..2025` | string | Chỉ ở `trends_th_province`: toạ độ, diện tích, dân số theo năm |
+| + lineage | | `_source`, `_ingested_at`, `_source_file`, `ingestion_date`, `_release`, `_file_md5` |
+
+### 4.7 `ph_doh` (Philippines DOH), 10 cột
+
+| Cột | Kiểu | Mô tả |
+|---|---|---|
+| `loc` | string | Tên tỉnh **hoặc thành phố lớn**, viết hoa (mục 3.15) |
+| `Region` | string | Vùng, vd `REGION V-BICOL REGION`, `NATIONAL CAPITAL REGION`. Viết hoa không đồng nhất (`Region I-…`), và Eastern Visayas bị nguồn ghi là `REGION VII-EASTERN VISAYAS` (đúng là VIII), trùng số với Central Visayas. Đừng dùng số La Mã làm khoá |
+| `date` | string | Ngày của tuần báo cáo, dạng `M/D/YYYY` |
+| `cases`, `deaths` | string | Số ca và số ca tử vong trong tuần |
+| + lineage | | `_source`, `_ingested_at`, `_source_file`, `ingestion_date`, `_version` |
+
+Dòng HXL (`#…`) ngay dưới header của file gốc đã bị bỏ khi nạp.
+
+### 4.8 `sg_nea` (cụm dịch Singapore), 19 cột
+
+Mỗi dòng là một cụm dịch đang hoạt động tại thời điểm fetch.
+
+Partition của một ngày phản ánh **lần fetch mới nhất trong ngày**. Nếu lần đó trả 0 cụm dịch,
+partition ngày đó **rỗng**: các dòng cũ bị xoá, còn file GeoJSON gốc vẫn nằm trong landing.
+Vì vậy Silver không phân biệt được "0 cụm dịch" với "hôm đó không chạy" chỉ bằng bảng này. Cần
+đọc thêm metadata `data/metadata/sg_nea/`: `status = success` với `record_count = 0` nghĩa là
+0 cụm dịch.
+
+| Cột | Kiểu | Mô tả |
+|---|---|---|
+| `LOCALITY`, `NAME` | string | Mô tả khu vực cụm dịch |
+| `CASE_SIZE` | string | Số ca trong cụm |
+| `HOMES`, `PUBLIC_PLACES`, `CONSTRUCTION_SITES` | string | Các trường thuộc tính của NEA (giữ nguyên tên gốc) |
+| `INC_CRC`, `OBJECTID`, `FMEL_UPD_D`, `HYPERLINK`, `SHAPE.AREA`, `SHAPE.LEN` | string | Mã, ngày cập nhật, liên kết và thông số hình học do NEA cung cấp |
+| `geometry` | string | Polygon GeoJSON dạng chuỗi |
+| `raw_payload` | string | Feature GeoJSON gốc |
+| + lineage | | `_source`, `_ingested_at`, `_source_file`, `ingestion_date`, `_fetched_at` |
+
+## 5. Lấy dữ liệu Bronze mới nhất
 
 ```powershell
-$env:PYTHONPATH = (Get-Location).Path
-.venv\Scripts\python.exe scripts\run_batch.py     # chạy cả 3 nguồn
-.venv\Scripts\python.exe scripts\check_bronze.py  # xem lại kết quả
+.venv\Scripts\python.exe scripts\run_batch.py      # mọi nguồn đang bật
+.venv\Scripts\python.exe scripts\check_bronze.py   # xem lại kết quả
 ```
 
 Hoặc đọc trực tiếp trong PySpark:
 
 ```python
-opendengue = spark.read.format("delta").load("data/bronze/opendengue")
-news_rss   = spark.read.format("delta").load("data/bronze/news_rss")
-who_gho    = spark.read.format("delta").load("data/bronze/who_gho")
+who_gho = spark.read.format("delta").load("data/bronze/who_gho")
+latest = who_gho.where("ingestion_date = (SELECT max(ingestion_date) FROM delta.`data/bronze/who_gho`)")
 ```
 
-Muốn xem EDA đầy đủ (chạy được trên Google Colab, không cần cài gì) —
-[`notebooks/eda_colab_bronze.ipynb`](../notebooks/eda_colab_bronze.ipynb), đã chạy thật
-(29/9/2026). Notebook còn giữ phần EDA của `sg_nea` như tư liệu lịch sử dù nguồn này đã gỡ
-khỏi pipeline chính thức.
+- `who_gho`, `sg_nea`: mỗi partition ngày là **một snapshot đầy đủ**, nên đọc partition mới nhất.
+- `news_rss`: một partition ngày chứa **mọi lần fetch** trong ngày đó (mỗi lần thêm khoảng 450
+  dòng). Đọc **mọi partition** rồi dedup. `_fetched_at` phân biệt các lần fetch, còn
+  `_ingested_at` thì giống nhau ở mọi dòng của partition.
+- Ngày partition là ngày **UTC**: chạy lúc 00:46 giờ Việt Nam ngày 30/09 vẫn ghi vào partition
+  `2026-09-29`.
+- Với `opendengue`, đọc release có version cao nhất.
+
+Muốn xem EDA (chạy được trên Google Colab) thì mở
+[`notebooks/eda_colab_bronze.ipynb`](../notebooks/eda_colab_bronze.ipynb). Notebook này làm trên
+Bronze **trước** đợt sửa ngày 29–30/09/2026, nên chưa có các cột mới.
 
 ## 6. Tài liệu liên quan
 
 | File | Nội dung |
 |---|---|
 | `README.md` | Cài đặt, kiến trúc, cách chạy, giới hạn từng nguồn |
-| `docs/bronze-layer-report.md` | Report kỹ thuật đầy đủ: chọn nguồn, Python/PySpark dùng để làm gì, landing/Bronze lưu ra sao, EDA |
-| `configs/sources.yaml` | Toàn bộ endpoint/tham số/lịch chạy/bật-tắt của từng nguồn |
+| `docs/bronze-layer-report.md` | Report kỹ thuật: chọn nguồn, landing/Bronze, EDA |
+| `docs/bronze-fixes.md` | Lỗi Bronze đã sửa, nguồn mới, vấn đề của chính nguồn dữ liệu |
+| `configs/sources.yaml` | Endpoint, tham số, lịch chạy, bật/tắt từng nguồn |

@@ -5,12 +5,15 @@ requests==2.32.3
 tenacity==9.0.0
 PyYAML==6.0.2
 
+# Doc XLSX (HDX COD-AB, TRENDS) qua pandas.read_excel
+openpyxl==3.1.5
+
 # Scheduling (batch runner)
 apscheduler==3.10.4
 python-dotenv==1.0.1
 
 # EDA / notebooks
-pandas==2.2.3
+pandas==2.3.3
 ipykernel==7.3.0
 
 # Test

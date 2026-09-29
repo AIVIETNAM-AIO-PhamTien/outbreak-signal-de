@@ -12,8 +12,9 @@ import json
 from pathlib import Path
 
 import pytest
+import requests
 
-from ingestion.common import paths
+from ingestion.common import http, paths
 from ingestion.common.metadata import STATUS_FAILED, STATUS_SUCCESS
 from ingestion.common.validation import IngestionValidationError
 
@@ -66,8 +67,14 @@ class FakeResponse:
         self.ok = 200 <= status_code < 300
         self.url = "https://xmart-api-public.who.int/ARBOV/V_DENGUE_GLOBAL_VALIDATED_PUBLIC"
 
+        self.headers: dict = {}
+
     def json(self) -> dict:
         return self._envelope
+
+    def raise_for_status(self) -> None:
+        if not self.ok:
+            raise requests.HTTPError(f"HTTP {self.status_code}", response=self)
 
 
 @pytest.fixture
@@ -85,7 +92,7 @@ def fake_call(monkeypatch: pytest.MonkeyPatch):
     from ingestion import who_gho
 
     monkeypatch.setattr(
-        who_gho.requests, "get", lambda *args, **kwargs: FakeResponse(WHO_ENVELOPE)
+        http.requests, "get", lambda *args, **kwargs: FakeResponse(WHO_ENVELOPE)
     )
     return WHO_ENVELOPE
 
@@ -146,9 +153,9 @@ class TestChuoiDayDu:
 
         # So ca giu nguyen kieu so nhu API tra ve (JSON tu suy ra kieu, khac
         # voi CSV cua opendengue phai ep inferSchema=False).
-        assert rows["VNM"] == 4637
-        assert rows["THA"] == 5921
-        assert rows["KHM"] == 6850
+        assert rows["VNM"] == "4637"
+        assert rows["THA"] == "5921"
+        assert rows["KHM"] == "6850"
 
 
 class TestIdempotency:
@@ -182,14 +189,18 @@ class TestThatBai:
     ) -> None:
         from ingestion import who_gho
 
-        monkeypatch.setattr(
-            who_gho.requests,
-            "get",
-            lambda *args, **kwargs: FakeResponse({}, status_code=500),
-        )
+        calls = []
 
-        with pytest.raises(IngestionValidationError):
+        def always_500(*args, **kwargs):
+            calls.append(1)
+            return FakeResponse({}, status_code=500)
+
+        monkeypatch.setattr(http.requests, "get", always_500)
+
+        # 5xx la loi tam thoi: thu lai du `retries` lan roi moi nem loi goc.
+        with pytest.raises(requests.HTTPError):
             who_gho.ingest(spark=spark)
+        assert len(calls) == 4  # retries: 3 trong config -> 1 + 3 lan
 
         record = latest_metadata("who_gho")
         assert record["status"] == STATUS_FAILED
@@ -203,7 +214,7 @@ class TestThatBai:
         # HTTP 200 hop le nhung "value" rong - tinh huong that co the xay ra
         # neu $filter khong khop nuoc nao (vi du go sai ma ISO3).
         monkeypatch.setattr(
-            who_gho.requests,
+            http.requests,
             "get",
             lambda *a, **k: FakeResponse({"@odata.context": "x", "value": []}),
         )

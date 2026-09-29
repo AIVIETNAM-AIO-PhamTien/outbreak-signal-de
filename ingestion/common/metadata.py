@@ -11,6 +11,7 @@ Hai thu do khac nhau va can ca hai.
 
 import hashlib
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,8 @@ class IngestionMetadata:
         source_version: Version cua dataset, neu nguon co danh version.
         duration_seconds: Thoi gian chay, tinh khi goi finish().
         error_message: Noi dung loi neu that bai, None neu thanh cong.
+        warnings: Van de khong lam hong lan chay (vd 1 feed loi, cham tran
+            so bai), de nguoi van hanh biet ma khong danh dau FAILED.
     """
 
     source: str
@@ -76,6 +79,18 @@ class IngestionMetadata:
     source_version: str | None = None
     duration_seconds: float | None = None
     error_message: str | None = None
+    warnings: list[str] = field(default_factory=list)
+
+    def skip(self, reason: str, record_count: int | None = None) -> None:
+        """Danh dau lan chay bo qua (khong co gi moi de nap) - khong phai loi.
+
+        Args:
+            reason: Ly do bo qua.
+            record_count: So dong hien co trong Bronze, neu biet.
+        """
+        self.status = STATUS_SKIPPED
+        self.record_count = record_count
+        self.warnings.append(reason)
 
     def add_raw_file(self, path: Path) -> None:
         """Ghi nhan mot file raw da luu xuong landing.
@@ -117,6 +132,22 @@ class IngestionMetadata:
             encoding="utf-8",
         )
         return path
+
+
+def write_or_log(meta: IngestionMetadata, logger: logging.Logger) -> None:
+    """Ghi metadata; neu chinh viec ghi bi loi thi chi log.
+
+    Goi trong khoi `finally` cua ingest(): neu write() nem loi o do, loi GOC
+    cua lan chay (neu co) se bi thay the va mat dau vet.
+
+    Args:
+        meta: Metadata lan chay.
+        logger: Logger cua nguon.
+    """
+    try:
+        logger.info("Da ghi metadata: %s", meta.write().name)
+    except Exception:  # noqa: BLE001 - khong de loi ghi metadata che loi ingestion
+        logger.exception("Khong ghi duoc metadata cua lan chay %s", meta.run_id)
 
 
 def _parse_iso(value: str):
