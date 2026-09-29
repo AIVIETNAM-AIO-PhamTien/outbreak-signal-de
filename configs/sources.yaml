@@ -14,14 +14,43 @@ defaults:
 sources:
 
   # --- Nguon MVP 1: so ca benh co cau truc, phu ca Dong Nam A -------------
+  # Dung SPATIAL extract, KHONG dung National extract. National chi co cap
+  # quoc gia (adm_1_name/adm_2_name luon la "NA", da xac nhan bang EDA). Du
+  # an se lam tang Silver va muc tieu goc la "khoanh vung nguy co" (khong
+  # phai chi "quoc gia nao") - Bronze phai giu cap tinh ngay tu dau, vi Silver
+  # KHONG the suy ra du lieu cap tinh tu du lieu da gop cap quoc gia.
+  # Da kiem chung: Spatial_extract la tap cha cua National (cung/nhieu hon so
+  # dong Admin0, cung do sau lich su 1960-2025 cho Viet Nam) + them du lieu
+  # Admin1/Admin2 cho ca 11 nuoc SEA. Khong danh doi gi khi chuyen sang file nay.
   opendengue:
     enabled: true
     source_type: file_download
     source_format: csv
     schedule: daily            # phat hanh theo version, vai thang moi co ban moi
     version: V1.3
-    url: https://github.com/OpenDengue/master-repo/raw/main/data/releases/V1.3/National_extract_V1_3.zip
-    timeout_seconds: 120       # file zip ~5MB, can lau hon mac dinh
+    url: https://github.com/OpenDengue/master-repo/raw/main/data/releases/V1.3/Spatial_extract_V1_3.zip
+    timeout_seconds: 180       # file zip ~55MB (vs 316KB cua National) - can lau hon nhieu
+
+    # Gioi han pham vi THU THAP theo phạm vi du an (Dong Nam A). Day KHONG
+    # phai transformation cua Bronze (khong doi ten, khong chuan hoa, khong
+    # ep kieu) - day la quyet dinh o BIEN GIOI ingestion, giong chon dataset_id
+    # nao de goi. Ly do bat buoc phai loc o day: file goc 2,8 trieu dong toan
+    # cau, SEA chi chiem 2,5% (~70.557 dong, da do that). Khong loc nghia la
+    # Bronze phai giu 97,5% du lieu khong bao gio dung toi trong pham vi du an.
+    # Ten nuoc theo dung chuan OpenDengue dung (UN naming) - "VIET NAM" CO
+    # dau cach, khong phai "VIETNAM" (bug da phat hien va sua trong spikes/).
+    filter_countries:
+      - VIET NAM
+      - THAILAND
+      - INDONESIA
+      - PHILIPPINES
+      - MALAYSIA
+      - MYANMAR
+      - CAMBODIA
+      - LAO PEOPLE'S DEMOCRATIC REPUBLIC
+      - SINGAPORE
+      - BRUNEI DARUSSALAM
+      - TIMOR-LESTE
 
   # --- Nguon MVP 2: tin tuc, tin hieu som ---------------------------------
   news_rss:
