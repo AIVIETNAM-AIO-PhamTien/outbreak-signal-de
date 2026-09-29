@@ -1,7 +1,29 @@
-# OutbreakSignal DE — Dengue Early Warning (Bronze Ingestion)
+# OutbreakSignal DE - Dengue Early Warning (Bronze Ingestion)
 
 Hệ thống thu thập và lưu trữ dữ liệu cảnh báo sớm dịch sốt xuất huyết ở Đông Nam Á.
-Nhóm Microwave — AIO 2026, Module 4 (*Data Sources and Data Ingestion using PySpark*).
+Nhóm Microwave - AIO 2026, Module 4 (*Data Sources and Data Ingestion using PySpark*).
+
+## Chạy nhanh
+
+Yêu cầu: Java 17 và Python 3.11/3.12 (Windows cần thêm winutils, xem [mục 6](#6-cài-đặt)).
+Trên Windows dùng **PowerShell**, không dùng Git Bash.
+
+```powershell
+git clone https://github.com/AIVIETNAM-AIO-PhamTien/outbreak-signal-de.git ; cd outbreak-signal-de
+py -3.11 -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\python.exe scripts
+un_batch.py        # ingest 3 nguồn: Landing → Bronze
+.venv\Scripts\python.exe scripts\check_bronze.py     # đọc lại Bronze để kiểm tra
+```
+```bash
+# Linux / macOS
+python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python scripts/run_batch.py
+.venv/bin/python scripts/check_bronze.py
+```
+
+Dữ liệu sinh ra ở `data/` (gitignored, không có sẵn trong repo) - ai clone về đều tự chạy để có data.
 
 ## 1. Mục tiêu
 
@@ -20,36 +42,31 @@ Theo feedback của TA, scope MVP đã được thu gọn còn **2 nguồn thậ
 | **[OpenDengue](https://opendengue.org/data.html)** | Số ca bệnh cấp quốc gia **+ cấp tỉnh** (`Spatial_extract`), SEA | CSV trong zip | 1 lần/ngày | Ground truth, lịch sử dài (1960→) |
 | **[Google News RSS](https://news.google.com/rss)** | Tin tức nhắc tới dengue | XML | Mỗi 30 phút | Tín hiệu sớm, nhanh hơn số liệu chính thức |
 | **[WHO GHO](https://xmart-api-public.who.int/ARBOV/V_DENGUE_GLOBAL_VALIDATED_PUBLIC)** | Số ca bệnh cấp quốc gia, kiểm chứng bởi WHO | JSON (OData) | 1 lần/ngày | Ground truth **mới hơn OpenDengue rất nhiều** |
-| [Singapore NEA](https://data.gov.sg/datasets/d_dbfabf16158d1b0e1c420627c0819168/view) | Cụm dịch: số ca **+ polygon toạ độ** | GeoJSON | 1 lần/ngày | Nguồn bổ sung, đã hoàn thiện |
-
-> ⚠️ **4 nguồn chính, vượt quá "2 nguồn MVP" TA đã chốt.** OpenDengue + News RSS là 2 nguồn
-> MVP ban đầu. WHO GHO và Singapore NEA được thêm sau vì lấp đúng lỗ hổng thật (độ trễ, độ
-> chi tiết địa lý) — nhưng đây là quyết định vượt scope, **cần báo lại TA** trước khi coi là
-> chính thức. Xem lý do chi tiết ở mục 11.
 
 Lý do cần News RSS: OpenDengue và WHO GHO đều chính xác nhưng có độ trễ (dù khác nhau nhiều),
 còn tin tức thì nhanh nhưng không có số liệu. Kết hợp mới ra được "cảnh báo sớm" đúng nghĩa.
 
-Lý do cần cả OpenDengue lẫn WHO GHO — hai nguồn **không thay thế nhau**: OpenDengue có lịch sử
+Lý do cần cả OpenDengue lẫn WHO GHO - hai nguồn **không thay thế nhau**: OpenDengue có lịch sử
 dài hơn và phủ đủ 11/11 nước SEA; WHO GHO mới hơn rất nhiều (trễ ~5 tuần so với ~17 tháng của
 OpenDengue) nhưng thiếu Philippines và Brunei. Giữ cả hai còn cho phép **phát hiện bất đồng**
-giữa hai nguồn cho cùng nước/tuần — một tín hiệu chất lượng dữ liệu mà một nguồn duy nhất
+giữa hai nguồn cho cùng nước/tuần - một tín hiệu chất lượng dữ liệu mà một nguồn duy nhất
 không có được.
 
-Singapore NEA được giữ lại vì code đã hoàn thiện và là nguồn **duy nhất có toạ độ thật** —
-thứ mà bài toán "khoanh vùng nguy cơ" cần, nhưng chỉ phủ 1/11 nước nên không đại diện SEA.
-
-Nguồn đã khảo sát nhưng **chưa triển khai** (GDELT — bị chặn mạng) — xem mục
-[11](#11-hạn-chế-đã-biết-về-truy-cập-nguồn).
 
 ## 3. Kiến trúc
+
+<p align="center"><img src="assets/outbreak-pipeline.png" alt="Luồng ingest Landing → Bronze" width="600"></p>
+
+*Hình: luồng ingest từ nguồn → Python → `data/landing/` → PySpark → `data/bronze/`. Hình vẽ cả Singapore NEA; nguồn này đã gỡ khỏi pipeline hiện tại (xem mục 2.1).*
+
+Sơ đồ chi tiết hơn (Mermaid):
 
 ```mermaid
 flowchart LR
     subgraph acq["Thu thập (Python thuần + requests)"]
         OD[OpenDengue<br/>zip → CSV]
         RSS[Google News RSS<br/>XML]
-        NEA[Singapore NEA<br/>GeoJSON]
+        WHO[WHO GHO<br/>OData JSON]
     end
 
     subgraph landing["data/landing/ — bản gốc nguyên trạng"]
@@ -64,21 +81,21 @@ flowchart LR
     subgraph bronze["data/bronze/ — Delta, phân vùng theo ingestion_date"]
         B[(opendengue)]
         B2[(news_rss)]
-        B3[(sg_nea)]
+        B3[(who_gho)]
     end
 
     M[(data/metadata/<br/>1 JSON mỗi lần chạy)]
 
     OD --> L
     RSS --> L
-    NEA --> L
+    WHO --> L
     L --> V --> W
     W --> B & B2 & B3
     W -.-> M
     acq -.-> M
 ```
 
-**Vì sao tách 2 bước:** Spark **không** gọi được API hay crawl web — Spark chỉ biết đọc file
+**Lý do tách 2 bước:** Spark **không** gọi được API hay crawl web, Spark chỉ biết đọc file
 có sẵn trên đĩa. Nên phải dùng Python thuần (`requests`) tải dữ liệu về `data/landing/`
 trước, rồi Spark mới đọc được. Logic thu thập của từng nguồn tách hẳn khỏi phần xử lý Spark.
 
@@ -87,7 +104,7 @@ trước, rồi Spark mới đọc được. Logic thu thập của từng ngu�
 Bronze **giữ nguyên trạng dữ liệu nguồn**. Không đổi tên cột, không lọc, không xoá trùng,
 không ép kiểu dữ liệu, không join, không suy ra trường mới.
 
-Ví dụ — nguồn trả về:
+Ví dụ - nguồn trả về:
 
 ```json
 {"country": "VNM", "reporting_period": "2026-06", "confirmed_cases": 120}
@@ -107,36 +124,36 @@ Thứ duy nhất Bronze được phép thêm là 4 cột truy vết:
 
 **Hai bản dữ liệu, hai vai trò:**
 
-- `data/landing/` — bản **gốc byte-for-byte**, không bao giờ bị sửa. Đây là source of truth.
-- `data/bronze/` — bản **Delta** để Spark query được, giữ nguyên nội dung + 4 cột trên.
+- `data/landing/` - bản **gốc byte-for-byte**, không bao giờ bị sửa. Đây là source of truth.
+- `data/bronze/` - bản **Delta** để Spark query được, giữ nguyên nội dung + 4 cột trên.
 
 Tách hai cái vì Bronze cần query được, mà nguyên tắc "giữ nguyên trạng nguồn" cũng phải có
 chỗ để thoả mãn.
 
 ### 4.1 Ngoại lệ: lọc phạm vi cho OpenDengue
 
-`ingestion/opendengue.py` **lọc dòng** trước khi ghi Bronze — điều này trông như vi phạm
+`ingestion/opendengue.py` **lọc dòng** trước khi ghi Bronze - điều này trông như vi phạm
 "không lọc" ở trên. Đây là ngoại lệ có chủ đích, áp dụng đúng một chỗ, lý do:
 
 OpenDengue dùng **`Spatial_extract`** (không phải `National_extract`) để có dữ liệu cấp
-tỉnh — `National_extract` chỉ có cấp quốc gia (`adm_1_name`/`adm_2_name` luôn là chuỗi
+tỉnh - `National_extract` chỉ có cấp quốc gia (`adm_1_name`/`adm_2_name` luôn là chuỗi
 `"NA"`, xác nhận bằng EDA). Vì dự án sẽ làm tầng Silver hướng tới "khoanh vùng nguy cơ",
-Bronze phải giữ cấp tỉnh ngay từ đầu — Silver không thể suy ngược dữ liệu tỉnh từ dữ liệu
+Bronze phải giữ cấp tỉnh ngay từ đầu - Silver không thể suy ngược dữ liệu tỉnh từ dữ liệu
 đã gộp cấp quốc gia.
 
 Nhưng `Spatial_extract` là **2.821.799 dòng toàn cầu** (~55MB nén), trong khi phạm vi dự
-án chỉ là 11 nước Đông Nam Á — chiếm **2,5%** dữ liệu gốc. Giữ nguyên 97,5% dữ liệu sẽ
+án chỉ là 11 nước Đông Nam Á - chiếm **2,5%** dữ liệu gốc. Giữ nguyên 97,5% dữ liệu sẽ
 không bao giờ được dùng là chi phí thật (dung lượng, thời gian ingest, thời gian mọi truy
 vấn Silver sau này), không phải lý thuyết.
 
 **Ranh giới đặt ra:**
 
-- `data/landing/` giữ **100%** file CSV gốc, không đụng đến — đúng nguyên tắc source of truth.
+- `data/landing/` giữ **100%** file CSV gốc, không đụng đến - đúng nguyên tắc source of truth.
 - `data/bronze/` chỉ giữ phần **trong phạm vi SEA** (`adm_0_name` khớp danh sách 11 nước
   trong `configs/sources.yaml`, khoá `filter_countries`).
 - Việc lọc là chọn **dòng nào được thu thập vào kho**, không sửa **giá trị** của dòng nào
-  còn lại — không đổi tên, không chuẩn hoá, không ép kiểu. Về bản chất gần với việc chọn
-  `dataset_id` nào để gọi API (ví dụ nguồn `sg_nea`) hơn là một phép biến đổi nghiệp vụ.
+  còn lại - không đổi tên, không chuẩn hoá, không ép kiểu. Về bản chất gần với việc chọn
+  tham số nào khi gọi API (ví dụ `$filter` của `who_gho`) hơn là một phép biến đổi nghiệp vụ.
 
 Kết quả thật (2026-09-29): `2.821.799 → 70.557 dòng` sau lọc, gồm cả `Admin0` (quốc gia,
 4.841 dòng) lẫn `Admin1`/`Admin2` (tỉnh/huyện, 65.716 dòng, 329 tỉnh phân biệt).
@@ -158,19 +175,18 @@ Kết quả thật (2026-09-29): `2.821.799 → 70.557 dòng` sau lọc, gồm c
 │   │   └── bronze.py             # ghi Delta + cột lineage
 │   ├── opendengue.py             # nguồn MVP 1 (Spatial_extract, lọc SEA)
 │   ├── news_rss.py               # nguồn MVP 2
-│   ├── who_gho.py                # nguồn bổ sung — ground truth mới hơn OpenDengue
-│   └── sg_nea_dengue.py          # nguồn bổ sung — polygon toạ độ thật
+│   └── who_gho.py                # nguồn bổ sung — ground truth mới hơn OpenDengue
 ├── scripts/
 │   ├── run_batch.py              # chạy batch — điểm vào chính
 │   ├── check_bronze.py           # đọc lại Bronze để kiểm tra
-│   ├── eda_bronze_sg_nea.py      # EDA bảng sg_nea
 │   └── smoke_test.py             # kiểm tra Spark + Delta + Java
 ├── spikes/                       # script test nhanh từng nguồn (giai đoạn khảo sát)
 ├── notebooks/
 ├── tests/
+├── assets/                       # ảnh dùng chung cho README / report
 ├── docs/
-│   ├── progress-notes.md         # ghi chú tiến độ, dùng viết report
-│   └── data-profile-sg-nea.md    # hồ sơ dữ liệu nguồn NEA
+│   ├── bronze-layer-report.md    # report kỹ thuật tầng Bronze
+│   └── handout-silver-layer.md   # bàn giao cho người làm Silver
 ├── data/                         # gitignored — tự sinh khi chạy
 │   ├── landing/<nguồn>/<ngày>/
 │   ├── bronze/<nguồn>/ingestion_date=<ngày>/
@@ -264,7 +280,6 @@ $env:PYTHONPATH = (Get-Location).Path
 .venv\Scripts\python.exe scripts\run_batch.py --source opendengue
 .venv\Scripts\python.exe scripts\run_batch.py --source news_rss
 .venv\Scripts\python.exe scripts\run_batch.py --source who_gho
-.venv\Scripts\python.exe scripts\run_batch.py --source sg_nea
 ```
 
 Chạy nhiều nguồn trong một lệnh: lặp lại `--source`.
@@ -285,7 +300,6 @@ TONG KET INGESTION
 ============================================================
   opendengue  SUCCESS  70,557 dong
   news_rss    SUCCESS  131 dong
-  sg_nea      SUCCESS  22 dong
   who_gho     SUCCESS  1,232 dong
   gdelt       SKIPPED  Bi rate-limit (HTTP 429) tu mang test, nghi do IP dung chung bi chan san.
 ============================================================
@@ -302,7 +316,6 @@ là lỗi).
 | News | `run_batch.py --source news_rss` | 30 phút |
 | OpenDengue | `run_batch.py --source opendengue` | 1 lần/ngày |
 | WHO GHO | `run_batch.py --source who_gho` | 1 lần/ngày |
-| SG NEA | `run_batch.py --source sg_nea` | 1 lần/ngày, khung 15–16h SGT |
 
 Không dùng Airflow cho MVP — cài và học tốn nhiều thời gian nhưng không thêm giá trị cho
 phạm vi hiện tại.
@@ -318,7 +331,6 @@ phạm vi hiện tại.
 | opendengue | 70.557 (đã lọc SEA) | 20 | `adm_0_name`, `adm_1_name`, `adm_2_name`, `ISO_A0`, `calendar_start_date`, `dengue_total`, … |
 | news_rss | ~65 / lần fetch | 9 | `title`, `link`, `pubDate`, `source`, `description` |
 | who_gho | 1.232 (đã lọc SEA, 9/11 nước) | 20 | `COUNTRY`, `ISO3`, `START_DATE`, `CASES`, `WHO_REGION`, … |
-| sg_nea | ~11 cụm / snapshot | 13 | `locality`, `case_count`, `polygon_geojson`, `raw_payload`, … |
 
 Số cột = cột gốc + 4 cột truy vết ở [mục 4](#4-nguyên-tắc-tầng-bronze).
 
@@ -333,8 +345,8 @@ Mỗi lần chạy, phân vùng của ngày được **dựng lại đầy đủ
 của ngày đó, rồi ghi đè bằng `replaceWhere`. Các ngày khác không bị động đến.
 
 Hệ quả: chạy lại bước nạp bao nhiêu lần cũng ra cùng kết quả, **không bao giờ nối thêm bản
-sao**. Riêng nguồn tin tức và NEA, mỗi lần *fetch mới* là một quan sát riêng nên số dòng
-tăng — đó là chủ ý, không phải lỗi trùng lặp. Việc gộp bài trùng là của Silver.
+sao**. Riêng nguồn tin tức, mỗi lần *fetch mới* là một quan sát riêng nên số dòng tăng —
+đó là chủ ý, không phải lỗi trùng lặp. Việc gộp bài trùng là của Silver.
 
 ## 10. Cấu trúc metadata
 
@@ -370,12 +382,12 @@ các cột `_source` / `_ingested_at` / `_source_file` trong bảng Bronze — �
 | Nguồn | Trạng thái | Chi tiết |
 |---|---|---|
 | **GDELT DOC 2.0** | Bị chặn | `HTTP 429` xác nhận lại 3 lần (29/9/2026), kể cả khi giãn 20s và xin 5 bản ghi/1 ngày — không phải lỗi gọi dồn dập, có vẻ là chặn IP mạng dùng chung. Giữ `spikes/test_gdelt_news.py` để thử lại từ mạng cá nhân. Đã thay bằng Google News RSS. |
-| **WHO GHO** | Đã tích hợp, phủ 9/11 nước | Chạy thật 29/9/2026: `1.232 dòng`, dữ liệu tới tuần 24/08/2026 (mới hơn OpenDengue rất nhiều — OpenDengue trễ ~17 tháng, WHO GHO trễ ~5 tuần). **Thiếu Philippines, Brunei** — đã kiểm tra kỹ, nguồn thực sự không có dữ liệu, không phải lỗi filter. Đây là nguồn thứ 4, **vượt scope "2 nguồn MVP" TA đã chốt** — cần báo lại TA. |
+| **WHO GHO** | Đã tích hợp, phủ 9/11 nước | Chạy thật 29/9/2026: `1.232 dòng`, dữ liệu tới tuần 24/08/2026 (mới hơn OpenDengue rất nhiều — OpenDengue trễ ~17 tháng, WHO GHO trễ ~5 tuần). **Thiếu Philippines, Brunei** — đã kiểm tra kỹ, nguồn thực sự không có dữ liệu, không phải lỗi filter. Phát hiện thêm: `(ISO3, START_DATE, DATE_TYPE)` **không phải khoá duy nhất** — 35/1.232 dòng trùng khoá này, cần tìm thêm cột phân biệt (khả năng có chiều dữ liệu khác chưa profile tới) trước khi dùng làm khoá join ở Silver. |
 | **ProMED** | Không làm | Không có cơ chế truy cập công khai phù hợp trong thời gian còn lại. Không triển khai để tránh scrape endpoint không được phép. |
 | **HealthMap** | Không làm | Như trên. Không tạo implementation giả, không bypass authentication, không scrape API không công bố. |
 | **Google News RSS** | Hạn chế nội dung | Không có trường quốc gia hay địa điểm nào. Suy ra quốc gia từ tiêu đề chỉ đạt ~22% (đo bằng keyword matching) — là việc của Silver, và là giới hạn trên của độ chính xác, cần nói rõ trong report. |
 | **OpenDengue** | Không phải live data | Phát hành theo version (V1.3 ra 27/05/2025, số liệu chỉ tới 04/2025). Kiểm tra bản mới 1 lần/ngày là đủ. Dùng `Spatial_extract` (không phải `National_extract`) để có cấp tỉnh — xem [mục 4.1](#41-ngoại-lệ-lọc-phạm-vi-cho-opendengue). |
-| **Singapore NEA** | Poll quá dày | NEA publish quanh 15:00 SGT, nội dung chỉ đổi mỗi 1–4 ngày. Poll 60 phút/lần nghĩa là ~99% số dòng là lặp lại — xem `docs/data-profile-sg-nea.md`. |
+| **Singapore NEA** | Đã gỡ khỏi pipeline | Từng có ingestion hoàn chỉnh (toạ độ thật, cấp cụm phố) nhưng chỉ phủ 1/11 nước SEA — không scale cho mục tiêu "phát hiện sớm cho các nước SEA". Lịch sử: xem git log. |
 
 ## 12. Chạy test
 
@@ -391,7 +403,6 @@ $env:PYTHONPATH = (Get-Location).Path
 | `test_paths.py` | Sinh đường dẫn, mốc thời gian, tách thư mục theo nguồn |
 | `test_metadata.py` | Đủ trường bắt buộc, checksum, duration, lần chạy thất bại |
 | `test_validation.py` | Nguồn không với tới được, file rỗng, file thiếu, landing rỗng |
-| `test_sg_nea_ingest.py` | Các hàm thuần của nguồn NEA |
 | `test_who_gho.py` | Hàm dựng OData `$filter` cho WHO GHO |
 | `test_integration_bronze.py` | OpenDengue: **nguồn → ingestion → Bronze → metadata** (kể cả filter SEA), chạy thật Spark + Delta |
 | `test_integration_who_gho.py` | WHO GHO: cùng chuỗi, chạy thật Spark + Delta |

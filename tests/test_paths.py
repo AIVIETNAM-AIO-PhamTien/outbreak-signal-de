@@ -60,7 +60,7 @@ class TestDuongDan:
         assert paths.BRONZE_ROOT not in paths.METADATA_ROOT.parents
 
 
-@pytest.mark.parametrize("source", ["opendengue", "news_rss", "sg_nea"])
+@pytest.mark.parametrize("source", ["opendengue", "news_rss", "who_gho"])
 def test_ba_nguon_khong_dung_chung_thu_muc(source: str) -> None:
-    others = {"opendengue", "news_rss", "sg_nea"} - {source}
+    others = {"opendengue", "news_rss", "who_gho"} - {source}
     assert all(bronze_path(source) != bronze_path(other) for other in others)

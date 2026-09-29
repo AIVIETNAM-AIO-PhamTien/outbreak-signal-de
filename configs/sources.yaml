@@ -66,19 +66,14 @@ sources:
       ceid: US:en
     user_agent: OutbreakSignalDE/0.1 (AIO student project)
 
-  # --- Nguon bo sung: da hoan thien, giu lai (khong nam tren duong gang) --
-  # Nguon DUY NHAT co toa do that (polygon cum dich).
-  sg_nea:
-    enabled: true
-    source_type: rest_api
-    source_format: geojson
-    schedule: daily            # NEA publish quanh 15:00 SGT, doi moi 1-4 ngay
-    dataset_id: d_dbfabf16158d1b0e1c420627c0819168
-    url: https://api-open.data.gov.sg/v1/public/api/datasets/{dataset_id}/poll-download
-    timeout_seconds: 30
-    poll_slot_minutes: 60      # do rong mot khe poll, dung lam batch_id
+  # --- Da GO BO: sg_nea (Singapore NEA) ------------------------------------
+  # Tung la nguon bo sung, da co ingestion hoan chinh (xem lich su git).
+  # Go khoi pipeline chinh thuc vi chi phu
+  # 1/11 nuoc SEA - khong scale duoc cho muc tieu "SEA" so nhieu, nen khong
+  # dung lam nen cho mo hinh chung toan vung. Giu 3 nguon con lai vi on
+  # dinh va phu du 11/11 (hoac gan du) nuoc SEA.
 
-  # --- Nguon bo sung 2: ground truth cap quoc gia, moi hon OpenDengue -----
+  # --- Nguon bo sung: ground truth cap quoc gia, moi hon OpenDengue -------
   # LUU Y: day la nguon thu 3 chinh thuc, vuot qua "2 nguon MVP" TA da chot.
   # Them vao vi lap dung mot lo hong that: OpenDengue tre toi ~17 thang, WHO
   # GHO chi tre ~5 tuan (da do 29/9/2026). Can bao lai TA ve viec vuot scope.
