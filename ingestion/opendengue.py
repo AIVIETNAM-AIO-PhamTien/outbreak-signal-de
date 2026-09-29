@@ -1,11 +1,24 @@
-"""Nguon MVP 1: OpenDengue - so ca sot xuat huyet theo quoc gia.
+"""Nguon MVP 1: OpenDengue - so ca sot xuat huyet, ca cap quoc gia lan cap tinh.
 
 Pipeline 2 buoc:
     Buoc 1 (Python thuan): tai zip -> giai nen CSV -> data/landing/
-    Buoc 2 (PySpark):      doc CSV cua ngay -> ghi Delta vao data/bronze/
+    Buoc 2 (PySpark):      doc CSV cua ngay -> loc pham vi SEA -> ghi Delta vao data/bronze/
 
 Vi sao tach 2 buoc: Spark KHONG goi duoc API hay tai duoc file tu Internet,
 no chi doc duoc file co san tren dia. Nen phai dung requests tai ve truoc.
+
+Dung SPATIAL extract (khong phai National): National chi co cap quoc gia
+(adm_1_name/adm_2_name luon la "NA", da xac nhan bang EDA). Du an se lam
+tang Silver voi muc tieu "khoanh vung nguy co" - Bronze phai giu cap tinh
+tu dau, vi Silver KHONG suy nguoc duoc du lieu cap tinh tu du lieu da gop
+cap quoc gia. Da kiem chung Spatial la tap cha cua National (cung/nhieu
+hon so dong Admin0, cung do sau lich su), khong danh doi gi khi doi sang.
+
+Loc theo pham vi du an (SEA) NGAY O DAY, truoc khi ghi Bronze - xem giai
+thich chi tiet trong configs/sources.yaml (khoa filter_countries). Day la
+NGOAI LE co chu dich cho nguyen tac "Bronze khong loc": file Spatial nang
+~55MB/2,8 trieu dong toan cau, SEA chi chiem 2,5%. Landing van giu 100%
+file goc chua loc - chi Bronze bi thu hep pham vi.
 
 Lich chay: 1 lan/ngay. OpenDengue khong phai live data - ho phat hanh theo
 version (V1.3, V1.2...), vai thang moi co ban moi, chay day hon cung chi tai
@@ -17,6 +30,7 @@ import zipfile
 from pathlib import Path
 
 import requests
+from pyspark.sql import functions as F
 
 from ingestion.common.bronze import add_bronze_columns, write_bronze
 from ingestion.common.config import source_config
@@ -80,18 +94,22 @@ def fetch_raw(cfg: dict, ingestion_date: str, meta: IngestionMetadata) -> Path:
     return csv_path
 
 
-def load_to_bronze(spark, ingestion_date: str) -> int:
-    """Buoc 2: Spark doc CSV cua ngay va ghi vao Bronze.
+def load_to_bronze(spark, cfg: dict, ingestion_date: str) -> int:
+    """Buoc 2: Spark doc CSV cua ngay, loc pham vi SEA, roi ghi vao Bronze.
 
     Args:
         spark: SparkSession dang hoat dong.
+        cfg: Config nguon tu configs/sources.yaml.
         ingestion_date: Ngay phan vung dang YYYY-MM-DD.
 
     Returns:
-        So dong da ghi.
+        So dong da ghi (sau khi loc).
 
     Raises:
-        IngestionValidationError: Neu landing rong hoac Spark doc ra 0 dong.
+        IngestionValidationError: Neu landing rong, Spark doc ra 0 dong, hoac
+            sau khi loc pham vi SEA khong con dong nao (dau hieu ten nuoc
+            trong filter_countries khong khop voi nguon - xem bug da gap voi
+            "VIETNAM" thieu dau cach).
     """
     landing = landing_dir(SOURCE, ingestion_date)
     check_landing_not_empty(landing, "*.csv", SOURCE)
@@ -99,9 +117,25 @@ def load_to_bronze(spark, ingestion_date: str) -> int:
     # inferSchema=False -> moi cot deu la string. CO Y nhu vay: Bronze giu
     # nguyen trang, khong ep kieu. Ep kieu la viec cua Silver.
     frame = spark.read.csv(str(landing / "*.csv"), header=True, inferSchema=False)
-    count = check_dataframe_readable(frame, SOURCE)
+    raw_count = check_dataframe_readable(frame, SOURCE)
 
-    # KHONG loc rieng Dong Nam A o day - Bronze giu toan bo du lieu goc.
+    # Loc theo pham vi du an (SEA) - xem giai thich trong docstring module va
+    # trong configs/sources.yaml. Day la loc THEO PHAM VI THU THAP, khong
+    # phai lam sach/chuan hoa gia tri - moi gia tri con lai giu nguyen y het
+    # nhu nguon tra ve.
+    countries = cfg.get("filter_countries")
+    if countries:
+        frame = frame.filter(F.col("adm_0_name").isin(countries))
+        count = check_dataframe_readable(frame, SOURCE)
+        log.info(
+            "Da loc theo pham vi SEA (%d nuoc): %s -> %s dong",
+            len(countries),
+            f"{raw_count:,}",
+            f"{count:,}",
+        )
+    else:
+        count = raw_count
+
     enriched = add_bronze_columns(frame, SOURCE, ingestion_date, utc_now())
     target = write_bronze(enriched, SOURCE, ingestion_date)
 
@@ -129,7 +163,7 @@ def ingest(spark=None) -> IngestionMetadata:
     try:
         fetch_raw(cfg, ingestion_date, meta)
         spark = spark or build_spark_session(f"{SOURCE}_ingest")
-        meta.record_count = load_to_bronze(spark, ingestion_date)
+        meta.record_count = load_to_bronze(spark, cfg, ingestion_date)
         log.info("=== Hoan tat: %s dong ===", f"{meta.record_count:,}")
         return meta
     except Exception as error:

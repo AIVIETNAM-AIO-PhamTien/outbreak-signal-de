@@ -21,11 +21,16 @@ from ingestion.common.validation import IngestionValidationError
 
 pytestmark = pytest.mark.integration
 
+# 3 dong SEA (con lai sau loc) + 1 dong JAPAN (ngoai SEA, phai bi loc mat).
+# "VIET NAM" CO dau cach - dung format that cua nguon, dung format trong
+# configs/sources.yaml. Vien JAPAN de test filter_countries co thuc su hoat
+# dong, khong chi giai dinh no chay ma khong kiem tra.
 CSV_BODY = (
     "adm_0_name,calendar_start_date,calendar_end_date,dengue_total\n"
-    "VIETNAM,2026-01-01,2026-01-07,120\n"
+    "VIET NAM,2026-01-01,2026-01-07,120\n"
     "THAILAND,2026-01-01,2026-01-07,300\n"
     "SINGAPORE,2026-01-01,2026-01-07,45\n"
+    "JAPAN,2026-01-01,2026-01-07,999\n"
 )
 
 
@@ -34,14 +39,14 @@ class FakeResponse:
         self.content = content
         self.status_code = 200
         self.ok = True
-        self.url = "https://example.invalid/National_extract_V1_3.zip"
+        self.url = "https://example.invalid/Spatial_extract_V1_3.zip"
 
 
 def make_zip() -> bytes:
     """Dung mot file zip chua dung mot CSV, giong hinh dang cua OpenDengue."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("National_extract_V1_3.csv", CSV_BODY)
+        archive.writestr("Spatial_extract_V1_3.csv", CSV_BODY)
     return buffer.getvalue()
 
 
@@ -83,10 +88,10 @@ class TestChuoiDayDu:
 
         # 1. File raw duoc giu lai o landing, khong chi nam trong bo nho.
         landing = paths.LANDING_ROOT / "opendengue" / meta.ingestion_date
-        assert (landing / "National_extract_V1_3.zip").exists()
-        assert (landing / "National_extract_V1_3.csv").exists()
+        assert (landing / "Spatial_extract_V1_3.zip").exists()
+        assert (landing / "Spatial_extract_V1_3.csv").exists()
 
-        # 2. Bronze co dung so dong cua nguon.
+        # 2. Bronze co dung so dong SAU KHI LOC pham vi SEA (JAPAN bi loai).
         frame = spark.read.format("delta").load(str(paths.BRONZE_ROOT / "opendengue"))
         assert frame.count() == 3
         assert meta.record_count == 3
@@ -118,8 +123,52 @@ class TestChuoiDayDu:
         rows = {row["adm_0_name"]: row["dengue_total"] for row in frame.collect()}
 
         # Ten nuoc van VIET HOA nhu nguon, so ca van la string vi inferSchema=False.
-        assert rows["VIETNAM"] == "120"
+        assert rows["VIET NAM"] == "120"
         assert "Vietnam" not in rows
+        assert "VIETNAM" not in rows  # dung dung ten UN naming, khong viet lien
+
+
+class TestLocPhamViSEA:
+    """Loc theo SEA la NGOAI LE co chu dich cua nguyen tac Bronze - kiem tra
+    rieng de dam bao ranh gioi dung: landing giu 100%, chi Bronze bi thu hep.
+    """
+
+    def test_landing_giu_nguyen_dong_ngoai_sea(
+        self, spark, isolated_data_roots, fake_download
+    ) -> None:
+        from ingestion import opendengue
+
+        meta = opendengue.ingest(spark=spark)
+
+        # File CSV trong landing phai con nguyen JAPAN - landing la source of
+        # truth, KHONG bi loc, du Bronze co loc hay khong.
+        landing = paths.LANDING_ROOT / "opendengue" / meta.ingestion_date
+        csv_text = (landing / "Spatial_extract_V1_3.csv").read_text(encoding="utf-8")
+        assert "JAPAN" in csv_text
+
+    def test_bronze_khong_con_dong_ngoai_sea(
+        self, spark, isolated_data_roots, fake_download
+    ) -> None:
+        from ingestion import opendengue
+
+        opendengue.ingest(spark=spark)
+        frame = spark.read.format("delta").load(str(paths.BRONZE_ROOT / "opendengue"))
+        countries = {row["adm_0_name"] for row in frame.collect()}
+
+        assert "JAPAN" not in countries
+        assert countries == {"VIET NAM", "THAILAND", "SINGAPORE"}
+
+    def test_metadata_ghi_nhan_dung_so_dong_sau_loc(
+        self, spark, isolated_data_roots, fake_download
+    ) -> None:
+        from ingestion import opendengue
+
+        opendengue.ingest(spark=spark)
+        record = latest_metadata("opendengue")
+
+        # record_count trong metadata phai la so SAU loc (3), khong phai
+        # tong so dong doc tu file (4) - metadata mo ta ket qua ghi Bronze.
+        assert record["record_count"] == 3
 
 
 class TestIdempotency:

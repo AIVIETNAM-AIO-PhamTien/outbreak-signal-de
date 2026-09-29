@@ -27,8 +27,13 @@ RAW_ZIP_PATH = OUT_DIR / "opendengue_national_raw.zip"
 SAMPLE_CSV_PATH = OUT_DIR / "opendengue_sea_sample.csv"
 
 # Ten nuoc Dong Nam A theo adm_0_name trong dataset OpenDengue.
+#
+# BUG DA SUA: "VIET NAM" phai CO dau cach - nguon ghi dung format UN naming.
+# Ban cu viet lien "VIETNAM" nen 317 dong cua Viet Nam bi loc mat am tham
+# (0 dong con lai khi giao voi SEA_COUNTRIES). Phat hien qua EDA, xem
+# notebooks/eda_colab_bronze.ipynb muc 2.3.
 SEA_COUNTRIES = {
-    "VIETNAM",
+    "VIET NAM",
     "THAILAND",
     "INDONESIA",
     "PHILIPPINES",

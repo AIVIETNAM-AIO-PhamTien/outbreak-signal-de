@@ -4,6 +4,78 @@ Note lại sau mỗi buổi làm để cuối kỳ viết report đỡ phải nh
 
 ---
 
+## 29/9 - Doi OpenDengue sang Spatial_extract, don sach du lieu cu
+
+### Vi sao doi
+
+EDA hom truoc phat hien National_extract (dang dung) chi co cap quoc gia -
+adm_1_name/adm_2_name luon la chuoi "NA". Vi du an se lam tang Silver voi
+muc tieu "khoanh vung nguy co" (khong phai chi "nuoc nao"), quyet dinh doi
+sang Spatial_extract truoc khi code nhieu them len tren nen National.
+
+Kiem chung truoc khi doi (quan trong, tranh doi mo hinh xong moi phat hien
+mat du lieu): tai ca 3 file that (National/Spatial/Temporal), doc truc tiep
+CSV ben trong. Spatial_extract la TAP CHA cua National - Viet Nam cap
+Admin0 trong Spatial co 414 dong (1960-2025), con NHIEU HON 317 dong cua
+National cho CUNG khoang thoi gian. Khong danh doi gi khi chuyen sang.
+
+### Van de phai giai quyet: 2,8 trieu dong toan cau, SEA chi 2,5%
+
+Spatial_extract nang 55MB/2.821.799 dong, nhung pham vi du an chi 11 nuoc
+SEA - do that: 70.557 dong (2,5%). Giu nguyen 97,5% du lieu ngoai pham vi
+la chi phi that (dung luong, thoi gian ingest, thoi gian moi truy van Silver
+sau nay), khong phai chi ly thuyet.
+
+Quyet dinh: loc theo SEA **chi o Bronze**, **khong o landing**. Landing van
+giu 100% file CSV goc (source of truth dung nghia). Coi day la quyet dinh
+PHAM VI THU THAP (giong chon dataset_id nao de goi API), khong phai
+transformation cua Bronze - khong doi gia tri, khong chuan hoa ten, chi
+chon dong nao duoc dua vao kho.
+
+### Bug da sua: "VIETNAM" thieu dau cach
+
+`spikes/test_opendengue.py` loc bang "VIETNAM" viet lien, nhung nguon ghi
+"VIET NAM" co dau cach (chuan UN naming). Viet Nam bi loai am tham khoi
+317 dong. Sua trong ca spike script lan filter_countries moi trong
+`configs/sources.yaml`.
+
+### Ket qua chay that (29/9)
+
+```
+opendengue: 2.821.799 -> 70.557 dong sau loc
+  S_res: Admin1=56.656  Admin2=9.060  Admin0=4.841
+  329 tinh phan biet, 66 huyen phan biet, du 11/11 nuoc SEA
+```
+
+Chay lai 2 lan lien tiep: van 70.557 dong - idempotency giu nguyen dung voi
+du lieu that (khong chi voi test gia lap).
+
+### Don dep
+
+Xoa toan bo `data/landing/`, `data/bronze/`, `data/metadata/` cu (du lieu
+theo National_extract, vo nghia sau khi doi nguon), `data/_legacy_parquet_bronze/`
+(backup Parquet tu truoc khi chuyen sang Delta, da het tac dung), va
+`output/bronze_test/` (rac tu spike chay som). Tat ca deu gitignored nen
+khong anh huong git history, chi la don dia phuong.
+
+### Test
+
+Them 3 test moi (`TestLocPhamViSEA`) kiem tra dung ranh gioi: landing van
+giu dong ngoai SEA (source of truth khong bi dung cham), Bronze thi khong
+con (da loc), metadata ghi dung so dong SAU loc. CSV gia lap trong
+test_integration_bronze.py them 1 dong "JAPAN" de test filter thuc su hoat
+dong, khong chi gia dinh no chay. 73/73 test pass.
+
+### Con lai
+
+- README da cap nhat so lieu that, chua cap nhat lai bang cau truc thu muc
+  neu co thay doi khac.
+- WHO GHO da test thanh cong (HTTP 200, du lieu toi tuan 24/8/2026) nhung
+  CHUA tich hop vao pipeline - cho quyet dinh co bao lai TA ve viec vuot
+  qua 2 nguon da chot hay khong.
+
+---
+
 ## 28/9 - Gộp code cả nhóm về một nhánh
 
 ### Vấn đề phải xử lý

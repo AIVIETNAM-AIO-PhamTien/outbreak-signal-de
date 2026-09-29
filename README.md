@@ -100,6 +100,34 @@ Thứ duy nhất Bronze được phép thêm là 4 cột truy vết:
 Tách hai cái vì Bronze cần query được, mà nguyên tắc "giữ nguyên trạng nguồn" cũng phải có
 chỗ để thoả mãn.
 
+### 4.1 Ngoại lệ: lọc phạm vi cho OpenDengue
+
+`ingestion/opendengue.py` **lọc dòng** trước khi ghi Bronze — điều này trông như vi phạm
+"không lọc" ở trên. Đây là ngoại lệ có chủ đích, áp dụng đúng một chỗ, lý do:
+
+OpenDengue dùng **`Spatial_extract`** (không phải `National_extract`) để có dữ liệu cấp
+tỉnh — `National_extract` chỉ có cấp quốc gia (`adm_1_name`/`adm_2_name` luôn là chuỗi
+`"NA"`, xác nhận bằng EDA). Vì dự án sẽ làm tầng Silver hướng tới "khoanh vùng nguy cơ",
+Bronze phải giữ cấp tỉnh ngay từ đầu — Silver không thể suy ngược dữ liệu tỉnh từ dữ liệu
+đã gộp cấp quốc gia.
+
+Nhưng `Spatial_extract` là **2.821.799 dòng toàn cầu** (~55MB nén), trong khi phạm vi dự
+án chỉ là 11 nước Đông Nam Á — chiếm **2,5%** dữ liệu gốc. Giữ nguyên 97,5% dữ liệu sẽ
+không bao giờ được dùng là chi phí thật (dung lượng, thời gian ingest, thời gian mọi truy
+vấn Silver sau này), không phải lý thuyết.
+
+**Ranh giới đặt ra:**
+
+- `data/landing/` giữ **100%** file CSV gốc, không đụng đến — đúng nguyên tắc source of truth.
+- `data/bronze/` chỉ giữ phần **trong phạm vi SEA** (`adm_0_name` khớp danh sách 11 nước
+  trong `configs/sources.yaml`, khoá `filter_countries`).
+- Việc lọc là chọn **dòng nào được thu thập vào kho**, không sửa **giá trị** của dòng nào
+  còn lại — không đổi tên, không chuẩn hoá, không ép kiểu. Về bản chất gần với việc chọn
+  `dataset_id` nào để gọi API (ví dụ nguồn `sg_nea`) hơn là một phép biến đổi nghiệp vụ.
+
+Kết quả thật (2026-09-29): `2.821.799 → 70.557 dòng` sau lọc, gồm cả `Admin0` (quốc gia,
+4.841 dòng) lẫn `Admin1`/`Admin2` (tỉnh/huyện, 65.716 dòng, 329 tỉnh phân biệt).
+
 ## 5. Cấu trúc thư mục
 
 ```
@@ -234,17 +262,17 @@ Muốn tắt hẳn một nguồn thì sửa `enabled: false` trong `configs/sour
 .venv\Scripts\python.exe scripts\run_batch.py
 ```
 
-Kết quả (chạy thật ngày 2026-09-28):
+Kết quả (chạy thật ngày 2026-09-29):
 
 ```
 ============================================================
 TONG KET INGESTION
 ============================================================
-  opendengue  SUCCESS  29,873 dong
-  news_rss    SUCCESS  130 dong
-  sg_nea      SUCCESS  22 dong
-  who_gho     SKIPPED  Chua trien khai. Ngoai scope MVP theo feedback TA.
-  gdelt       SKIPPED  Bi rate-limit (HTTP 429) tu mang test...
+  opendengue  SUCCESS  70,557 dong
+  news_rss    SUCCESS  66 dong
+  sg_nea      SUCCESS  11 dong
+  who_gho     SKIPPED  Chua trien khai. Ngoai scope MVP theo feedback TA (chot 2 nguon).
+  gdelt       SKIPPED  Bi rate-limit (HTTP 429) tu mang test, nghi do IP dung chung bi chan san.
 ============================================================
 ```
 
@@ -271,11 +299,16 @@ phạm vi hiện tại.
 
 | Nguồn | Số dòng | Số cột | Cột gốc được giữ nguyên |
 |---|---|---|---|
-| opendengue | 29.873 | 20 | `adm_0_name`, `ISO_A0`, `calendar_start_date`, `dengue_total`, … |
+| opendengue | 70.557 (đã lọc SEA) | 20 | `adm_0_name`, `adm_1_name`, `adm_2_name`, `ISO_A0`, `calendar_start_date`, `dengue_total`, … |
 | news_rss | 65 / lần fetch | 9 | `title`, `link`, `pubDate`, `source`, `description` |
 | sg_nea | ~11 cụm / snapshot | 13 | `locality`, `case_count`, `polygon_geojson`, `raw_payload`, … |
 
 Số cột = cột gốc + 4 cột truy vết ở [mục 4](#4-nguyên-tắc-tầng-bronze).
+
+**opendengue dùng Spatial_extract, không phải National_extract.** Lý do và số liệu chi tiết
+xem [mục 4.1](#41-ngoại-lệ-lọc-phạm-vi-cho-opendengue). File gốc có 2.821.799 dòng toàn cầu;
+sau khi lọc còn lại xuống 70.557 dòng cho 11 nước SEA — bao gồm cả cấp quốc gia (`Admin0`,
+4.841 dòng) lẫn cấp tỉnh/huyện (`Admin1`/`Admin2`, 65.716 dòng, 329 tỉnh phân biệt).
 
 ### Idempotency — chọn cách ghi đè phân vùng ngày
 
@@ -296,17 +329,17 @@ Mỗi lần chạy — **thành công hay thất bại** — đều để lại 
   "source": "opendengue",
   "source_type": "file_download",
   "source_format": "csv",
-  "source_url": "https://github.com/OpenDengue/master-repo/raw/main/...",
-  "ingestion_date": "2026-09-28",
-  "ingestion_timestamp": "2026-09-28T11:15:18.472913+00:00",
-  "run_id": "20260928T111518Z",
+  "source_url": "https://github.com/OpenDengue/master-repo/raw/main/data/releases/V1.3/Spatial_extract_V1_3.zip",
+  "ingestion_date": "2026-09-29",
+  "ingestion_timestamp": "2026-09-29T04:26:10.428169+00:00",
+  "run_id": "20260929T042610Z",
   "ingestion_mode": "batch",
   "status": "success",
-  "record_count": 29873,
-  "raw_files": [{"path": "...", "bytes": 316140, "sha256": "..."}],
-  "bytes_downloaded": 316140,
+  "record_count": 70557,
+  "raw_files": [{"path": "...", "bytes": 54687820, "sha256": "..."}],
+  "bytes_downloaded": 54687820,
   "source_version": "V1.3",
-  "duration_seconds": 32.94,
+  "duration_seconds": 35.56,
   "error_message": null
 }
 ```
@@ -319,12 +352,12 @@ các cột `_source` / `_ingested_at` / `_source_file` trong bảng Bronze — �
 
 | Nguồn | Trạng thái | Chi tiết |
 |---|---|---|
-| **GDELT DOC 2.0** | Bị chặn | Trả HTTP 429 liên tục từ mạng test dù đã giảm tần suất. Nghi do IP dùng chung bị chặn sẵn chứ script viết đúng docs. Giữ `spikes/test_gdelt_news.py` để thử lại từ mạng khác. Đã thay bằng Google News RSS. |
-| **WHO GHO** | Chưa triển khai | Endpoint đã xác định, nhưng ngoài scope MVP 2 nguồn theo feedback TA. Khai báo sẵn trong `configs/sources.yaml` với `enabled: false`. |
+| **GDELT DOC 2.0** | Bị chặn | `HTTP 429` xác nhận lại 3 lần (29/9/2026), kể cả khi giãn 20s và xin 5 bản ghi/1 ngày — không phải lỗi gọi dồn dập, có vẻ là chặn IP mạng dùng chung. Giữ `spikes/test_gdelt_news.py` để thử lại từ mạng cá nhân. Đã thay bằng Google News RSS. |
+| **WHO GHO** | Đã xác nhận dùng được, chưa tích hợp | Test trực tiếp 29/9/2026: `HTTP 200`, dữ liệu tới tuần 24/08/2026 (mới hơn OpenDengue nhiều). Phủ 9/11 nước SEA (thiếu Philippines, Brunei). Ngoài scope MVP 2 nguồn theo feedback TA — khai báo sẵn trong `configs/sources.yaml` với `enabled: false`. |
 | **ProMED** | Không làm | Không có cơ chế truy cập công khai phù hợp trong thời gian còn lại. Không triển khai để tránh scrape endpoint không được phép. |
 | **HealthMap** | Không làm | Như trên. Không tạo implementation giả, không bypass authentication, không scrape API không công bố. |
-| **Google News RSS** | Hạn chế nội dung | Không có trường quốc gia hay địa điểm nào. Suy ra quốc gia từ tiêu đề là việc của Silver (keyword matching), và sẽ có sai số — cần nói rõ trong report. |
-| **OpenDengue** | Không phải live data | Phát hành theo version (V1.3 ra 27/05/2025, số liệu chỉ tới 04/2025). Kiểm tra bản mới 1 lần/ngày là đủ. |
+| **Google News RSS** | Hạn chế nội dung | Không có trường quốc gia hay địa điểm nào. Suy ra quốc gia từ tiêu đề chỉ đạt ~22% (đo bằng keyword matching) — là việc của Silver, và là giới hạn trên của độ chính xác, cần nói rõ trong report. |
+| **OpenDengue** | Không phải live data | Phát hành theo version (V1.3 ra 27/05/2025, số liệu chỉ tới 04/2025). Kiểm tra bản mới 1 lần/ngày là đủ. Dùng `Spatial_extract` (không phải `National_extract`) để có cấp tỉnh — xem [mục 4.1](#41-ngoại-lệ-lọc-phạm-vi-cho-opendengue). |
 | **Singapore NEA** | Poll quá dày | NEA publish quanh 15:00 SGT, nội dung chỉ đổi mỗi 1–4 ngày. Poll 60 phút/lần nghĩa là ~99% số dòng là lặp lại — xem `docs/data-profile-sg-nea.md`. |
 
 ## 12. Chạy test
