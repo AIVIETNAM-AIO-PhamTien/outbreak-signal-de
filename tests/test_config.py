@@ -70,7 +70,8 @@ class TestConfigThat:
         for name in ("opendengue", "news_rss", "who_gho"):
             cfg = source_config(name)
             assert cfg["enabled"] is True
-            assert cfg["url"]
+            # OpenDengue khong co URL co dinh: hoi GitHub API ban phat hanh moi nhat.
+            assert cfg.get("url") or cfg.get("releases_api")
             assert cfg["source_type"]
             assert cfg["source_format"]
             assert cfg["timeout_seconds"] > 0

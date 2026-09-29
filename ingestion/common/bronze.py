@@ -58,15 +58,48 @@ def add_bronze_columns(
     )
     if with_input_file:
         # Cho biet moi dong den tu file nao - can thiet voi nguon chay nhieu
-        # lan trong ngay, vi mot phan vung ngay gom nhieu lan fetch.
-        enriched = enriched.withColumn("_source_file", F.input_file_name())
+        # lan trong ngay, vi mot phan vung ngay gom nhieu lan fetch. Chi giu
+        # phan tinh tu thu muc landing/ (vd "news_rss/2026-09-29/x.jsonl"):
+        # duong dan tuyet doi "file:///C:/Users/..." khac nhau giua cac may.
+        enriched = enriched.withColumn(
+            "_source_file",
+            F.regexp_replace(F.input_file_name(), r"^.*/landing/", ""),
+        )
     return enriched.withColumn(PARTITION_COLUMN, F.lit(ingestion_date))
+
+
+def ingested_rows(spark, source: str, **equals: str) -> int:
+    """So dong Bronze khop moi dieu kien cot = gia tri; 0 neu bang chua co.
+
+    Dung cho nguon phat hanh theo phien ban (OpenDengue, HDX, Zenodo): phien
+    ban + dau van tay file da nap roi thi bo qua, khong tai lai. "Da nap gi"
+    doc nguoc tu chinh bang Delta - khong co file trang thai rieng de lech.
+
+    Args:
+        spark: SparkSession.
+        source: Ten bang Bronze.
+        **equals: Cac cap cot = gia tri, vd release="V1.3", _file_sha="...".
+
+    Returns:
+        So dong khop.
+    """
+    from delta.tables import DeltaTable
+
+    target = str(bronze_path(source))
+    if not DeltaTable.isDeltaTable(spark, target):
+        return 0
+    frame = spark.read.format("delta").load(target)
+    if any(column not in frame.columns for column in equals):
+        return 0
+    for column, value in equals.items():
+        frame = frame.where(F.col(column) == value)
+    return frame.count()
 
 
 def write_bronze(
     df: DataFrame,
     source: str,
-    ingestion_date: str,
+    partition_value: str,
     partition_column: str = PARTITION_COLUMN,
 ) -> Path:
     """Ghi DataFrame vao bang Delta Bronze cua mot nguon.
@@ -83,7 +116,8 @@ def write_bronze(
     Args:
         df: DataFrame da co cot lineage va cot phan vung.
         source: Ten nguon.
-        ingestion_date: Ngay phan vung dang YYYY-MM-DD.
+        partition_value: Gia tri phan vung can thay the (ngay YYYY-MM-DD, hoac
+            ten ban phat hanh voi OpenDengue).
         partition_column: Ten cot phan vung.
 
     Returns:
@@ -94,7 +128,7 @@ def write_bronze(
         df.write.format("delta")
         .mode("overwrite")
         .partitionBy(partition_column)
-        .option("replaceWhere", f"{partition_column} = '{ingestion_date}'")
+        .option("replaceWhere", f"{partition_column} = '{partition_value}'")
         .option("mergeSchema", "true")
         .save(str(target))
     )

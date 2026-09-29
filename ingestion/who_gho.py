@@ -31,15 +31,15 @@ import json
 import sys
 from pathlib import Path
 
-import requests
-
+from ingestion.common import http
 from ingestion.common.bronze import add_bronze_columns, write_bronze
 from ingestion.common.config import source_config
 from ingestion.common.logging import get_logger
-from ingestion.common.metadata import IngestionMetadata, new_metadata
+from ingestion.common.metadata import IngestionMetadata, new_metadata, write_or_log
 from ingestion.common.paths import landing_dir, run_id, today_str, utc_now
 from ingestion.common.spark_session import build_spark_session
 from ingestion.common.validation import (
+    IngestionValidationError,
     check_dataframe_readable,
     check_landing_not_empty,
     check_raw_file,
@@ -104,7 +104,8 @@ def fetch_raw(
     }
 
     log.info("Goi WHO GHO xMart, loc %d ma ISO3", len(cfg["filter_iso3"]))
-    response = requests.get(cfg["url"], params=params, timeout=cfg["timeout_seconds"])
+    fetched_at = utc_now().isoformat()
+    response = http.get(cfg["url"], cfg["retries"], cfg["timeout_seconds"], params=params)
     check_response_ok(response, SOURCE)
     log.info("HTTP %s, %s bytes", response.status_code, f"{len(response.content):,}")
 
@@ -116,19 +117,20 @@ def fetch_raw(
     envelope = response.json()
     records = envelope.get("value", [])
 
-    # Canh bao neu so dong dung dung $top - dau hieu co the bi server cat
-    # bot (chua thay xay ra voi SEA, nhung API co the doi hanh vi sau nay).
+    # Cham $top nghia la server co the da cat bot. Truoc day chi log canh bao
+    # nen lan chay van SUCCESS voi du lieu thieu - nay tu choi ghi. (1.232 dong
+    # ngay 29/9/2026, con xa tran 10.000 nen chua can lam phan trang.)
     if len(records) >= cfg["top"]:
-        log.warning(
-            "So dong (%d) bang hoac vuot $top=%d - co the bi server cat bot, "
-            "nen tang $top trong configs/sources.yaml",
-            len(records),
-            cfg["top"],
+        raise IngestionValidationError(
+            f"[{SOURCE}] {len(records)} dong >= $top={cfg['top']} - co the bi cat bot, "
+            "tang $top trong configs/sources.yaml hoac lam phan trang"
         )
 
     jsonl_path = dest / f"who_gho_{ingestion_date}.jsonl"
     with open(jsonl_path, "w", encoding="utf-8") as handle:
         for record in records:
+            # _fetched_at: thoi diem goi API, khong bi ghi de khi dung lai partition.
+            record = {**record, "_fetched_at": fetched_at}
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     check_raw_file(jsonl_path, SOURCE)
@@ -160,7 +162,10 @@ def load_to_bronze(spark, ingestion_date: str) -> int:
     landing = landing_dir(SOURCE, ingestion_date)
     check_landing_not_empty(landing, "*.jsonl", SOURCE)
 
-    frame = spark.read.json(str(landing / "*.jsonl"))
+    # Doc MOI cot la chuoi: Bronze khong ep kieu. De Spark tu suy kieu thi cot
+    # toan null (POPULATION) thanh string, hom nao co so se doi kieu va vo buoc
+    # ghi Delta (schema drift). Ep kieu la viec cua Silver.
+    frame = spark.read.option("primitivesAsString", True).json(str(landing / "*.jsonl"))
     count = check_dataframe_readable(frame, SOURCE)
 
     enriched = add_bronze_columns(frame, SOURCE, ingestion_date, utc_now())
@@ -198,8 +203,7 @@ def ingest(spark=None) -> IngestionMetadata:
         log.error("=== That bai: %s ===", meta.error_message)
         raise
     finally:
-        path = meta.write()
-        log.info("Da ghi metadata: %s", path.name)
+        write_or_log(meta, log)
         if owns_session and spark is not None:
             spark.stop()
 

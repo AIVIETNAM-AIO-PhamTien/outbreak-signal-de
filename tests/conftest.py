@@ -62,3 +62,13 @@ sources:
         encoding="utf-8",
     )
     return path
+
+
+@pytest.fixture(autouse=True)
+def no_retry_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bo thoi gian cho giua cac lan thu lai HTTP trong test (van thu lai du so lan)."""
+    from tenacity import wait_none
+
+    from ingestion.common import http
+
+    monkeypatch.setattr(http, "WAIT", wait_none())
