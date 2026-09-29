@@ -21,7 +21,7 @@ from pathlib import Path
 # PYTHONPATH: them goc repo vao sys.path truoc khi import package ingestion.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ingestion import news_rss, opendengue, sg_nea_dengue  # noqa: E402
+from ingestion import news_rss, opendengue, sg_nea_dengue, who_gho  # noqa: E402
 from ingestion.common.config import all_sources, source_config  # noqa: E402
 from ingestion.common.logging import get_logger  # noqa: E402
 from ingestion.common.metadata import (  # noqa: E402
@@ -34,11 +34,12 @@ from ingestion.common.spark_session import build_spark_session  # noqa: E402
 log = get_logger("run_batch")
 
 # Nguon nao da co module ingestion. Nguon khai bao trong YAML nhung chua co
-# module (who_gho, gdelt) se bao SKIPPED kem ly do, chu khong lam vo batch.
+# module (gdelt) se bao SKIPPED kem ly do, chu khong lam vo batch.
 JOBS = {
     "opendengue": opendengue.ingest,
     "news_rss": news_rss.ingest,
     "sg_nea": sg_nea_dengue.ingest,
+    "who_gho": who_gho.ingest,
 }
 
 

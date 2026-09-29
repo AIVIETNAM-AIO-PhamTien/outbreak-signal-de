@@ -4,6 +4,78 @@ Note lại sau mỗi buổi làm để cuối kỳ viết report đỡ phải nh
 
 ---
 
+## 29/9 (buoi 2) - Them ingestion that cho WHO GHO
+
+### Tu spike sang production
+
+Buoi truoc moi chi test WHO GHO bang curl thu cong, chua co code trong repo.
+Buoi nay viet `ingestion/who_gho.py` theo dung pattern 3 nguon co san: fetch
+raw (Python) -> landing -> Spark doc -> Bronze + metadata + validation.
+
+Xac nhan truoc khi viet code (khong doan): goi lai API khong co `$select`,
+kiem tra co `@odata.nextLink` (phan trang) hay khong. Ket qua: KHONG phan
+trang, schema day du 15 truong (COUNTRY, ISO3, WHO_REGION, YEAR, DATE_NUM,
+START_DATE, DATE_TYPE, CASES, CONFIRMED_CASES, SEVERE_CASES, DEATHS, SERO_1-4,
+POPULATION). Myanmar thuoc WHO_REGION "SEAR" chu khong phai "WPR" nhu Viet
+Nam - xac nhan loc theo ISO3 dung hon loc theo WHO_REGION (11 nuoc SEA nam
+rai rac o 2 region khac nhau).
+
+### Loc server-side, khac han OpenDengue
+
+WHO GHO ho tro OData `$filter=ISO3 in (...)` that su, nen loc ngay o
+REQUEST - khong can tai toan cau roi bo di nhu OpenDengue (OpenDengue phai
+lam vay vi la file zip tinh, khong co tham so loc o URL). Day la lua chon
+PHAM VI THU THAP tu dau, sach hon truong hop OpenDengue.
+
+### Bug that phat hien khi viet integration test
+
+Copy pattern dat ten file theo `run_id` tu `news_rss.py` (moi lan chay mot
+file rieng: `who_gho_<run_id>.jsonl`). Test idempotency (chay 3 lan, ky
+vong van 3 dong) that bai: ra 9 dong.
+
+Nguyen nhan: `load_to_bronze()` doc GLOB `*.jsonl` cua ca ngay (dung cho
+news_rss vi moi fetch la bai MOI that su, phai cong don). Nhung WHO GHO la
+snapshot ground-truth (giong OpenDengue) - goi lai trong ngay tra ve GAN
+NHU CUNG du lieu, nen glob cong don 3 file gan giong nhau -> nhan ba.
+
+Sua: dat ten file theo NGAY (`who_gho_<ingestion_date>.jsonl`) thay vi theo
+run_id, giong cach opendengue dung ten file co dinh cho zip. Lan chay sau
+trong cung ngay GHI DE, khong cong don. Bai hoc: khong copy pattern giua
+cac nguon ma khong xem lai BAN CHAT du lieu co giong nhau khong - news (event
+stream, phai cong don) va WHO GHO/OpenDengue (snapshot, phai ghi de) can
+idempotency KHAC NHAU du cung la "goi API roi luu JSON".
+
+### Ket qua chay that (29/9)
+
+```
+who_gho: 1.232 dong (da loc 11 ma ISO3 qua $filter server-side)
+  9/11 nuoc co du lieu - thieu Philippines (PHL), Brunei (BRN)
+  Da kiem tra rieng: khong phai loi query, nguon that su khong co
+```
+
+Chay lai 2 lan lien tiep tren du lieu that: van dung 1.232 dong ca hai lan -
+idempotency dung voi du lieu that, khong chi voi mock.
+
+Chay full batch ca 4 nguon (opendengue, news_rss, sg_nea, who_gho) cung
+luc: tat ca SUCCESS, khong nguon nao anh huong nguon khac.
+
+### Test
+
+Them `tests/test_who_gho.py` (5 test cho `build_odata_filter` - logic
+thuan, khong mang) va `tests/test_integration_who_gho.py` (8 test, chuoi
+day du + idempotency + 2 kieu that bai: HTTP loi, response rong). Sua luon
+`tests/test_config.py` vi assumption cu (who_gho phai enabled=false) khong
+con dung. Tong 86 test pass.
+
+### Quyet dinh chua chot - can lam ro voi TA
+
+Gio du an dang co **4 nguon chinh thuc** (opendengue, news_rss, who_gho,
+sg_nea), vuot qua "2 nguon MVP" TA da chot truoc do. Da ghi ro trong
+README (canh bao dau muc 2) va trong `configs/sources.yaml` (comment tren
+khoi who_gho). Chua bao lai TA - can lam truoc khi nop report.
+
+---
+
 ## 29/9 - Doi OpenDengue sang Spatial_extract, don sach du lieu cu
 
 ### Vi sao doi

@@ -78,15 +78,38 @@ sources:
     timeout_seconds: 30
     poll_slot_minutes: 60      # do rong mot khe poll, dung lam batch_id
 
-  # --- Backlog: da khao sat, chua trien khai ------------------------------
-  # Bat len chi khi da co nguoi nhan va da co spike xac nhan schema.
+  # --- Nguon bo sung 2: ground truth cap quoc gia, moi hon OpenDengue -----
+  # LUU Y: day la nguon thu 3 chinh thuc, vuot qua "2 nguon MVP" TA da chot.
+  # Them vao vi lap dung mot lo hong that: OpenDengue tre toi ~17 thang, WHO
+  # GHO chi tre ~5 tuan (da do 29/9/2026). Can bao lai TA ve viec vuot scope.
   who_gho:
-    enabled: false
+    enabled: true
     source_type: rest_api
     source_format: json
-    schedule: daily
+    schedule: daily            # ground truth cap tuan/thang, khong phai tin tuc can chay day
     url: https://xmart-api-public.who.int/ARBOV/V_DENGUE_GLOBAL_VALIDATED_PUBLIC
-    note: Chua trien khai. Ngoai scope MVP theo feedback TA (chot 2 nguon).
+    timeout_seconds: 30
+    top: 10000                 # tran an toan cho $top cua OData; canh bao neu cham tran
+
+    # Loc SERVER-SIDE qua OData $filter=ISO3 in (...) - khac OpenDengue
+    # (phai tai toan cau roi loc o Bronze vi file zip tinh khong co tham so
+    # loc). O day khong can tai du lieu ngoai pham vi ve may.
+    filter_iso3:
+      - VNM
+      - THA
+      - IDN
+      - PHL
+      - MYS
+      - MMR
+      - KHM
+      - LAO
+      - SGP
+      - BRN
+      - TLS
+    note: >
+      Da xac nhan dung duoc (HTTP 200, 29/9/2026). Phu 9/11 nuoc SEA (thieu
+      Philippines, Brunei - da kiem tra bang $filter rieng, khong phai loi
+      query, nguon thuc su khong co du lieu cho hai nuoc nay).
 
   gdelt:
     enabled: false
