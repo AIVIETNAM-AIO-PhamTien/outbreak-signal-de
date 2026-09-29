@@ -4,7 +4,7 @@ Dung cho scheduler (Windows Task Scheduler / cron). Vi du:
 
     python scripts/run_batch.py                      # moi nguon dang bat
     python scripts/run_batch.py --source opendengue  # rieng mot nguon
-    python scripts/run_batch.py --source news_rss --source sg_nea
+    python scripts/run_batch.py --source news_rss --source who_gho
 
 CACH LY LOI: moi nguon chay trong try/except rieng. Mot nguon chet khong keo
 theo nguon khac, va du lieu nguon da nap thanh cong KHONG bi xoa. Bang tong
@@ -21,7 +21,7 @@ from pathlib import Path
 # PYTHONPATH: them goc repo vao sys.path truoc khi import package ingestion.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ingestion import news_rss, opendengue, sg_nea_dengue, who_gho  # noqa: E402
+from ingestion import news_rss, opendengue, who_gho  # noqa: E402
 from ingestion.common.config import all_sources, source_config  # noqa: E402
 from ingestion.common.logging import get_logger  # noqa: E402
 from ingestion.common.metadata import (  # noqa: E402
@@ -38,7 +38,6 @@ log = get_logger("run_batch")
 JOBS = {
     "opendengue": opendengue.ingest,
     "news_rss": news_rss.ingest,
-    "sg_nea": sg_nea_dengue.ingest,
     "who_gho": who_gho.ingest,
 }
 

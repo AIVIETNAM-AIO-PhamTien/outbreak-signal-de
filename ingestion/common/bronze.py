@@ -45,9 +45,10 @@ def add_bronze_columns(
         ingestion_date: Ngay phan vung dang YYYY-MM-DD.
         ingested_at: Thoi diem chay, ghi vao cot _ingested_at.
         with_input_file: True thi sinh cot _source_file bang input_file_name().
-            Dat False khi DataFrame duoc tao bang createDataFrame() - luc do
-            Spark khong biet file nguon nen input_file_name() tra ve chuoi
-            rong, va nguon phai tu dien cot _source_file (xem sg_nea_dengue).
+            Dat False khi DataFrame duoc tao bang createDataFrame() thay vi
+            doc truc tiep tu file - luc do Spark khong biet file nguon nen
+            input_file_name() tra ve chuoi rong, va nguon phai tu dien cot
+            _source_file khi build rows.
 
     Returns:
         DataFrame da san sang ghi vao Bronze.

@@ -16,9 +16,8 @@ Loc pham vi SEA O TANG REQUEST (OData $filter=ISO3 in (...)), KHAC voi
 OpenDengue phai tai toan cau roi moi loc o Bronze. Ly do khac nhau: day la
 REST API co ho tro loc server-side that su (tham so $filter), nen khong co
 ly do gi phai tai du lieu ngoai pham vi ve may roi bo di - day la lua chon
-PHAM VI THU THAP tu dau (giong chon dataset_id de goi API cua sg_nea), sach
-hon truong hop OpenDengue (buoc "tai roi loc" o do la bat buoc vi file zip
-tinh khong co tham so loc o URL).
+PHAM VI THU THAP tu dau, sach hon truong hop OpenDengue (buoc "tai roi loc"
+o do la bat buoc vi file zip tinh khong co tham so loc o URL).
 
 Han che da biet (xem spikes/test_who_gho.py): WHO GHO chi phu 9/11 nuoc SEA
 - thieu Philippines va Brunei. Da xac nhan khong phai loi query, nguon thuc
@@ -78,9 +77,7 @@ def fetch_raw(
     khong doi trong ngay), khac han news RSS noi moi lan fetch la bai viet
     MOI thuc su. Neu dat ten theo run_id (moi lan chay mot file rieng), glob
     "*.jsonl" luc doc se cong don nhieu ban COPY cua gan nhu cung du lieu -
-    da tung gay loi that: chay 3 lan trong ngay ra 9 dong thay vi 3. Dat ten
-    theo ngay khien lan chay sau trong cung ngay GHI DE ban truoc, giong
-    cach opendengue dung ten file co dinh cho zip.
+    da tung gay loi that: chay 3 lan trong ngay ra 9 dong thay vi 3.
 
     Vi sao luu ca hai file:
       - .json la RESPONSE GOC y nguyen server tra ve, ca phan envelope
@@ -147,8 +144,8 @@ def load_to_bronze(spark, ingestion_date: str) -> int:
     """Buoc 2: Spark doc TAT CA file .jsonl cua ngay va ghi vao Bronze.
 
     Doc ca thu muc cua ngay chu khong chi file vua tai, giong quy uoc cua
-    news_rss va sg_nea: phan vung cua ngay phai duoc dung lai DAY DU moi lan
-    chay de idempotency dung, chay lai nhieu lan trong ngay khong bi nhan doi.
+    news_rss: phan vung cua ngay phai duoc dung lai DAY DU moi lan chay de
+    idempotency dung, chay lai nhieu lan trong ngay khong bi nhan doi.
 
     Args:
         spark: SparkSession dang hoat dong.

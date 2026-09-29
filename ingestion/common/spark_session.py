@@ -1,6 +1,6 @@
 """Shared local-mode SparkSession builder with Delta Lake configured.
 
-Every ingestion job (GDELT, Singapore NEA, WHO GHO) calls `build_spark_session()`
+Every ingestion job (OpenDengue, News RSS, WHO GHO) calls `build_spark_session()`
 to get a SparkSession pointed at Delta Lake, runs its own bronze-write, and lets
 the caller stop the session. One session per job invocation, not a long-lived
 shared session, so jobs don't hold JVM resources between scheduler runs.

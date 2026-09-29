@@ -63,11 +63,11 @@ class TestEnabledSources:
 class TestConfigThat:
     """Config that trong repo phai dung duoc, khong chi file gia trong test."""
 
-    def test_bon_nguon_dang_bat_deu_du_truong_bat_buoc(self) -> None:
-        # opendengue/news_rss/sg_nea la 3 nguon MVP + bo sung ban dau; who_gho
-        # la nguon thu 4 moi them, vuot qua "2 nguon MVP" TA da chot - xem
-        # ghi chu trong configs/sources.yaml.
-        for name in ("opendengue", "news_rss", "sg_nea", "who_gho"):
+    def test_ba_nguon_dang_bat_deu_du_truong_bat_buoc(self) -> None:
+        # 3 nguon on dinh nhat, giu lam pipeline chinh thuc: opendengue +
+        # who_gho (ground truth) + news_rss (tin hieu som). sg_nea da go bo -
+        # xem ghi chu trong configs/sources.yaml.
+        for name in ("opendengue", "news_rss", "who_gho"):
             cfg = source_config(name)
             assert cfg["enabled"] is True
             assert cfg["url"]
