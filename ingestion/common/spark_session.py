@@ -1,6 +1,6 @@
 """Shared local-mode SparkSession builder with Delta Lake configured.
 
-Every ingestion job (GDELT, Singapore NEA, WHO GHO) calls `build_spark_session()`
+Every ingestion job (OpenDengue, News RSS, WHO GHO) calls `build_spark_session()`
 to get a SparkSession pointed at Delta Lake, runs its own bronze-write, and lets
 the caller stop the session. One session per job invocation, not a long-lived
 shared session, so jobs don't hold JVM resources between scheduler runs.
@@ -50,5 +50,13 @@ def build_spark_session(app_name: str) -> SparkSession:
             "spark.sql.catalog.spark_catalog",
             "org.apache.spark.sql.delta.catalog.DeltaCatalog",
         )
+        # Moc thoi gian trong metadata deu la UTC; ep session dung UTC luon de
+        # cot timestamp trong Bronze khong lech theo may cua tung nguoi.
+        .config("spark.sql.session.timeZone", "UTC")
+        # Thanh tien do ve de len log, lam bang tong ket cuoi batch kho doc.
+        .config("spark.ui.showConsoleProgress", "false")
     )
-    return configure_spark_with_delta_pip(builder).getOrCreate()
+    spark = configure_spark_with_delta_pip(builder).getOrCreate()
+    # Chi giu log tu ERROR tro len - INFO cua Spark at het log cua pipeline.
+    spark.sparkContext.setLogLevel("ERROR")
+    return spark

@@ -1,0 +1,203 @@
+# Dinh nghia nguon du lieu cho pipeline ingestion.
+#
+# Moi endpoint / tham so cua nguon deu khai bao o day, KHONG hardcode trong
+# code. Muon tat mot nguon thi doi enabled: false, khong phai sua code.
+#
+# KHONG dat API key / credential trong file nay (file nay commit len git).
+# Neu nguon nao can key, doc tu bien moi truong trong module cua nguon do.
+
+defaults:
+  mode: batch
+  timeout_seconds: 60
+  retries: 3
+
+sources:
+
+  # --- Nguon MVP 1: so ca benh co cau truc, phu ca Dong Nam A -------------
+  # Dung SPATIAL extract, KHONG dung National extract. National chi co cap
+  # quoc gia (adm_1_name/adm_2_name luon la "NA", da xac nhan bang EDA). Du
+  # an se lam tang Silver va muc tieu goc la "khoanh vung nguy co" (khong
+  # phai chi "quoc gia nao") - Bronze phai giu cap tinh ngay tu dau, vi Silver
+  # KHONG the suy ra du lieu cap tinh tu du lieu da gop cap quoc gia.
+  # Da kiem chung: Spatial_extract la tap cha cua National (cung/nhieu hon so
+  # dong Admin0, cung do sau lich su 1960-2025 cho Viet Nam) + them du lieu
+  # Admin1/Admin2 cho ca 11 nuoc SEA. Khong danh doi gi khi chuyen sang file nay.
+  opendengue:
+    enabled: true
+    source_type: file_download
+    source_format: csv
+    schedule: daily            # phat hanh theo version, vai thang moi co ban moi
+    # Khong co dinh version: moi lan chay hoi GitHub API ban phat hanh moi nhat
+    # (thu muc data/releases/V*). Cung ban + cung sha file -> bo qua, khong tai
+    # lai ~55MB. Bronze phan vung theo `release`, khong theo ngay chay.
+    releases_api: https://api.github.com/repos/OpenDengue/master-repo/contents/data/releases
+    extract: Spatial
+    timeout_seconds: 180       # file zip ~55MB (vs 316KB cua National) - can lau hon nhieu
+
+    # Gioi han pham vi THU THAP theo phạm vi du an (Dong Nam A). Day KHONG
+    # phai transformation cua Bronze (khong doi ten, khong chuan hoa, khong
+    # ep kieu) - day la quyet dinh o BIEN GIOI ingestion, giong chon dataset_id
+    # nao de goi. Ly do bat buoc phai loc o day: file goc 2,8 trieu dong toan
+    # cau, SEA chi chiem 2,5% (~70.557 dong, da do that). Khong loc nghia la
+    # Bronze phai giu 97,5% du lieu khong bao gio dung toi trong pham vi du an.
+    # Ten nuoc theo dung chuan OpenDengue dung (UN naming) - "VIET NAM" CO
+    # dau cach, khong phai "VIETNAM" (bug da phat hien va sua trong spikes/).
+    filter_countries:
+      - VIET NAM
+      - THAILAND
+      - INDONESIA
+      - PHILIPPINES
+      - MALAYSIA
+      - MYANMAR
+      - CAMBODIA
+      - LAO PEOPLE'S DEMOCRATIC REPUBLIC
+      - SINGAPORE
+      - BRUNEI DARUSSALAM
+      - TIMOR-LESTE
+
+  # --- Nguon MVP 2: tin tuc, tin hieu som ---------------------------------
+  news_rss:
+    enabled: true
+    source_type: rss
+    source_format: xml
+    schedule: every_30_minutes # bai moi ra lien tuc
+    url: https://news.google.com/rss/search
+    user_agent: OutbreakSignalDE/0.1 (AIO student project)
+    # Moi nuoc 1 feed, tieng ban xu neu Google News ho tro. `recency` gan vao
+    # cuoi query: khong co thi Google xep theo do lien quan va tra ca bai tu
+    # 2013 (do 29/9/2026: 0/64 bai trong 7 ngay voi query cu "dengue Southeast Asia").
+    # Da thu 29/9/2026: locale km / lo / my tra 0 bai -> KH, LA, MM dung tieng Anh.
+    # Google tra toi da 100 bai / query -> cham 100 thi canh bao (co the bi cat).
+    recency: when:7d
+    max_items: 100
+    feeds:
+      - {country: VNM, gl: VN, hl: vi, q: "sốt xuất huyết"}
+      - {country: THA, gl: TH, hl: th, q: "ไข้เลือดออก"}
+      - {country: IDN, gl: ID, hl: id, q: "demam berdarah"}
+      - {country: PHL, gl: PH, hl: en, q: "dengue"}
+      - {country: MYS, gl: MY, hl: ms, q: "denggi"}
+      - {country: SGP, gl: SG, hl: en, q: "dengue"}
+      - {country: KHM, gl: KH, hl: en, q: "dengue Cambodia"}
+      - {country: LAO, gl: LA, hl: en, q: "dengue Laos"}
+      - {country: MMR, gl: MM, hl: en, q: "dengue Myanmar"}
+      - {country: TLS, gl: TL, hl: en, q: "dengue Timor-Leste"}
+      - {country: BRN, gl: BN, hl: en, q: "dengue Brunei"}
+
+  # --- Da GO BO: sg_nea (Singapore NEA) ------------------------------------
+  # Tung la nguon bo sung, da co ingestion hoan chinh (xem lich su git).
+  # Go khoi pipeline chinh thuc vi chi phu
+  # 1/11 nuoc SEA - khong scale duoc cho muc tieu "SEA" so nhieu, nen khong
+  # dung lam nen cho mo hinh chung toan vung. Giu 3 nguon con lai vi on
+  # dinh va phu du 11/11 (hoac gan du) nuoc SEA.
+
+  # --- Nguon bo sung: ground truth cap quoc gia, moi hon OpenDengue -------
+  # LUU Y: day la nguon thu 3 chinh thuc, vuot qua "2 nguon MVP" TA da chot.
+  # Them vao vi lap dung mot lo hong that: OpenDengue tre toi ~17 thang, WHO
+  # GHO chi tre ~5 tuan (da do 29/9/2026). Can bao lai TA ve viec vuot scope.
+  who_gho:
+    enabled: true
+    source_type: rest_api
+    source_format: json
+    schedule: daily            # ground truth cap tuan/thang, khong phai tin tuc can chay day
+    url: https://xmart-api-public.who.int/ARBOV/V_DENGUE_GLOBAL_VALIDATED_PUBLIC
+    timeout_seconds: 30
+    top: 10000                 # tran an toan cho $top cua OData; canh bao neu cham tran
+
+    # Loc SERVER-SIDE qua OData $filter=ISO3 in (...) - khac OpenDengue
+    # (phai tai toan cau roi loc o Bronze vi file zip tinh khong co tham so
+    # loc). O day khong can tai du lieu ngoai pham vi ve may.
+    filter_iso3:
+      - VNM
+      - THA
+      - IDN
+      - PHL
+      - MYS
+      - MMR
+      - KHM
+      - LAO
+      - SGP
+      - BRN
+      - TLS
+    note: >
+      Da xac nhan dung duoc (HTTP 200, 29/9/2026). Phu 9/11 nuoc SEA (thieu
+      Philippines, Brunei - da kiem tra bang $filter rieng, khong phai loi
+      query, nguon thuc su khong co du lieu cho hai nuoc nay).
+
+  # --- Du lieu cap tinh (them 29/9/2026, nhanh feat/silver-gold) ----------
+  # Pham vi: CHI 11 nuoc SEA. Xem docs/silver-gold-healthmap.md.
+
+  # Ten + P-code + ngay hieu luc + toa do tam don vi hanh chinh (UN OCHA COD-AB).
+  hdx_cod_ab:
+    enabled: true
+    source_type: rest_api
+    source_format: xlsx
+    schedule: weekly           # ranh gioi doi hiem (VN sap nhap 7/2025 la ngoai le)
+    url: https://data.humdata.org/api/3/action/package_show
+    timeout_seconds: 300
+    countries: [VNM, THA, IDN, PHL, MYS, MMR, KHM, LAO, TLS]   # SGP, BRN: HDX khong co COD-AB
+    admin_levels:
+      default: [1]
+      PHL: [1, 2]              # o PH, "tinh" la cap 2 (cap 1 = vung)
+    # Polygon COD chi tai khi can that: goi GeoJSON qua nang (PHL 1,06 GB).
+    # VNM (28 MB): 34 tinh moi tu 1/7/2025, dung de noi 63 tinh cu -> moi.
+    geometry_countries: [VNM]
+
+  # Dan so cap tinh (UN OCHA COD-PS) - de tinh ca / 100.000 dan.
+  hdx_cod_ps:
+    enabled: true
+    source_type: rest_api
+    source_format: csv
+    schedule: weekly
+    url: https://data.humdata.org/api/3/action/package_show
+    timeout_seconds: 300
+    filter_iso3: [VNM, THA, IDN, PHL, MYS, MMR, KHM, LAO, SGP, BRN, TLS]
+    resources:
+      # File toan cau (~12 MB) -> loc ve 11 nuoc ngay khi nap. Co 8/11 nuoc (thieu BRN, MMR, SGP).
+      - {key: global_admin1, package: cod-ps-global, pattern: "^cod_population_admin1\\.csv$",
+         admin_level: 1, filter_to_sea: true}
+      # PH: tinh la cap 2; file rieng cua PH, nam moi nhat.
+      - {key: phl_admin2, package: cod-ps-phl, pattern: "^phl_admpop_adm2_\\d{4}.*\\.csv$",
+         admin_level: 2}
+
+  # Thai Lan: so ca theo tuan x 77 tinh, 2016-2025 (TRENDS, Zenodo, CC-BY-4.0).
+  trends_th:
+    enabled: true
+    source_type: rest_api
+    source_format: xlsx
+    schedule: weekly
+    url: https://zenodo.org/api/records/20269896/versions/latest
+    timeout_seconds: 300
+    sheets: {weekly: "weekly data", province: "province data"}
+
+  # Philippines: so ca + tu vong theo tuan x 126 tinh/thanh, 2016-2020 (DOH qua HDX, CC-BY).
+  ph_doh:
+    enabled: true
+    source_type: rest_api
+    source_format: csv
+    schedule: weekly
+    url: https://data.humdata.org/api/3/action/package_show
+    package: philippine-dengue-cases-and-deaths
+    pattern: "^DOH-Epi Dengue Data 2016-2021\\.csv$"
+    timeout_seconds: 120
+
+  # Singapore: cum dich dang hoat dong (polygon + so ca), NEA qua data.gov.sg.
+  # Nguon DUOI cap quoc gia, HIEN TAI duy nhat cua SGP. Tung go vi "chi 1/11 nuoc";
+  # dua lai vi muc tieu moi la phu cang nhieu nuoc cang tot o cap tinh.
+  sg_nea:
+    enabled: true
+    source_type: rest_api
+    source_format: geojson
+    schedule: daily
+    url: https://api-open.data.gov.sg/v1/public/api/datasets/d_dbfabf16158d1b0e1c420627c0819168/poll-download
+    timeout_seconds: 60
+
+  gdelt:
+    enabled: false
+    source_type: rest_api
+    source_format: json
+    schedule: every_30_minutes
+    url: https://api.gdeltproject.org/api/v2/doc/doc
+    note: >
+      Bi rate-limit (HTTP 429) tu mang test, nghi do IP dung chung bi chan san.
+      Script spike giu o spikes/test_gdelt_news.py de thu lai tu mang khac.
+      Da thay bang Google News RSS lam nguon tin tuc.
