@@ -45,7 +45,9 @@ các vấn đề ở mục 3.
 | `opendengue` | Số ca lịch sử, cấp quốc gia và tỉnh | Phủ 11/11 nước, từ 1960, nhưng trễ ~17 tháng. Số liệu cấp tỉnh của VN/PHL/KHM/LAO chỉ tới 2010 |
 | `who_gho` | Số ca **gần đây**, cấp quốc gia | Trễ ~5 tuần. Không có Philippines, Brunei |
 | `news_rss` | Tín hiệu sớm | Nguồn **duy nhất** gần real-time. 11 feed theo nước, ngôn ngữ bản xứ |
-| `hdx_cod_ab` (+ `_geometry`) | Danh mục đơn vị hành chính (P-code) | Khoá để quy mọi nguồn cấp tỉnh về cùng một bộ mã |
+| `hdx_cod_ab` (+ `_geometry`) | Danh mục đơn vị hành chính (P-code) | Khoá đích để quy các nguồn cấp tỉnh về một bộ mã. **Với VN phải đi qua `vn_province_crosswalk`** — P-code của `hdx_cod_ab` (34 tỉnh mới, `VN01`) và `hdx_cod_ps` (63 tỉnh cũ, `VN101`) giao nhau bằng 0 |
+| `vn_province_crosswalk` | Bảng nối 64 tỉnh cũ VN → 34 tỉnh mới | Bắt buộc trước mọi phép join cấp tỉnh của Việt Nam. Phủ cả NQ 202/2025/QH15 và Hà Tây (2008) |
+| `geoboundaries_adm` | Ranh giới vá lấp cho nước COD-AB không có | Hiện chỉ Brunei (4 district ADM1). Dùng `shapeID` riêng, **không phải** P-code OCHA |
 | `hdx_cod_ps` | Dân số theo đơn vị | Mẫu số cho ca / 100.000 dân |
 | `trends_th_weekly`, `trends_th_province` | Số ca Thái Lan, tuần × 77 tỉnh, 2016–2025 | Nguồn cấp tỉnh **gần đây duy nhất** |
 | `ph_doh` | Số ca Philippines, tuần × tỉnh | Tháng đầy đủ cuối cùng 12/2020 |
@@ -99,11 +101,24 @@ trên dữ liệu thật ngày 29/09/2026.
     Số bài theo nước không so trực tiếp được với nhau.
 11. **`news_rss.source` là tên nhà xuất bản**, dễ nhầm với cột lineage `_source` (luôn là
     `"news_rss"`).
-12. **Việt Nam sáp nhập 63 → 34 tỉnh từ 01/07/2025.**
+12. **Việt Nam sáp nhập 63 → 34 tỉnh từ 01/07/2025.** → **đã có bảng nối.**
     - `hdx_cod_ab` chỉ còn 34 tỉnh mới, trong khi `hdx_cod_ps` và `opendengue` dùng 63 tỉnh cũ.
-    - Cần bảng đơn vị có thời gian hiệu lực (SCD2) và bảng nối cũ → mới.
-13. **`hdx_cod_ab`:** Indonesia là bản 2020 (34 tỉnh, chưa có 4 tỉnh Papua mới). Không có
-    Singapore, Brunei. P-code của Philippines lệch giữa `hdx_cod_ab` và `hdx_cod_ps`.
+    - Hai hệ P-code **giao nhau bằng 0** (`VN66` vs `VN605`), nên không join trực tiếp được.
+      Nguy hiểm hơn số lượng: tên trùng nhau vẫn là hai thứ khác nhau — "Dak Lak" cũ 1,93 triệu
+      dân, "Dak Lak" mới = Đắk Lắk + Phú Yên = 2,80 triệu dân. Join theo tên **chạy được mà ra
+      số sai ~45%, không báo lỗi**.
+    - Dùng bảng `vn_province_crosswalk` (64 dòng → 34 đơn vị): chuẩn hoá tên → `old_name`,
+      tra `new_pcode`, rồi `GROUP BY new_pcode` cộng dồn. Luôn quy **cũ → mới**; chiều ngược
+      lại là phép tách, không khôi phục được.
+    - **Chưa cần SCD2**: toàn bộ dữ liệu VN trong OpenDengue kết thúc 31/03/2025, tức 100%
+      thuộc kỳ cũ. SCD2 chỉ cần khi có dữ liệu sau 01/07/2025 đổ về.
+13. **`hdx_cod_ab`:** Indonesia là bản 2020 (34 tỉnh, chưa có 4 tỉnh Papua mới).
+    P-code của Philippines lệch giữa `hdx_cod_ab` và `hdx_cod_ps`.
+    - **Brunei**: HDX không có COD-AB (`cod-ab-brn`/`-bru`/`-brunei-darussalam` đều HTTP 404,
+      kiểm chứng 08/10/2026). Đã vá bằng `geoboundaries_adm` — 4 district ADM1, khớp 4/4 với
+      `adm_1_name` của OpenDengue. Để **bảng riêng** vì `shapeID` không phải P-code OCHA.
+    - **Singapore**: vẫn không có và **không vá** — geoBoundaries cho 5 *region* trong khi
+      OpenDengue chỉ có 1 dòng `CENTRAL SINGAPORE`, khác cấp. Singapore đã có `sg_nea`.
 14. **`hdx_cod_ps` có hai dạng bảng trong cùng một bảng Delta**, phân biệt bằng `_resource`:
     - dạng dài (`Gender`, `Age_range`, `Population`);
     - dạng rộng của PHL cấp 2 (`T_TL`, `F_00_04`…).
@@ -259,6 +274,45 @@ Vì vậy Silver không phân biệt được "0 cụm dịch" với "hôm đó 
 | `geometry` | string | Polygon GeoJSON dạng chuỗi |
 | `raw_payload` | string | Feature GeoJSON gốc |
 | + lineage | | `_source`, `_ingested_at`, `_source_file`, `ingestion_date`, `_fetched_at` |
+
+### 4.9 `vn_province_crosswalk` (bảng nối 64 tỉnh cũ VN → 34 tỉnh mới), phân vùng `_version`
+
+64 dòng, mỗi dòng là **một đơn vị cấp tỉnh cũ** và đích của nó sau sáp nhập. Không phải nguồn
+tải từ mạng: seed file `configs/reference/vn_province_merge_2025.csv` trong repo, vì đây là dữ
+liệu pháp lý cố định và HDX chỉ phát hành bản hiện hành (34 dòng, `valid_to` đều rỗng).
+
+| Cột | Kiểu | Mô tả |
+|---|---|---|
+| `old_name` | string | Tên tỉnh cũ, chính tả chuẩn `hdx_cod_ps` (vd `Thua Thien Hue`) |
+| `old_pcode_ps` | string | P-code cũ 5 ký tự để join `hdx_cod_ps` (vd `VN411`). Rỗng với Hà Tây |
+| `new_name`, `new_pcode` | string | Tên và P-code mới 4 ký tự, khớp đúng `hdx_cod_ab` (vd `Hue`, `VN46`) |
+| `effective_from` | string | `2025-07-01` (NQ 202) hoặc `2008-08-01` (Hà Tây) |
+| `legal_basis` | string | `NQ 202/2025/QH15` hoặc `NQ 15/2008/QH12` |
+| `source_aliases` | string | Chính tả của nguồn khác, ngăn bằng `\|` — hiện là `adm_1_name` của OpenDengue (vd `THUA THIEN - HUE`) |
+| + lineage | | `_source`, `_ingested_at`, `_source_file`, `ingestion_date`, `_version`, `iso3` |
+
+Mỗi lần chạy, job **đối chiếu ngược** `new_pcode` với bảng `hdx_cod_ab` thật: thừa hoặc thiếu
+một đơn vị là FAILED ngay, không ghi bảng nối lệch. `_version` = SHA-256 của seed (12 ký tự đầu).
+
+Cách dùng ở Silver: chuẩn hoá tên nguồn → `old_name` (qua `source_aliases`), tra `new_pcode`,
+rồi `GROUP BY new_pcode` cộng dồn số ca và dân số. **Chỉ đi cũ → mới.**
+
+### 4.10 `geoboundaries_adm` (ranh giới vá lấp), phân vùng `_partition`
+
+Chỉ các nước `hdx_cod_ab` không phủ. Hiện là Brunei, 4 district cấp ADM1.
+
+| Cột | Kiểu | Mô tả |
+|---|---|---|
+| `iso3`, `admin_level`, `_partition` | string | Nước, cấp hành chính, phân vùng dạng `BRN_ADM1` |
+| `shape_id`, `shape_name`, `shape_iso` | string | Mã và tên đơn vị. `shape_id` là mã riêng của geoBoundaries, **không phải P-code OCHA** |
+| `shape_group`, `shape_type` | string | Mã nước và cấp, theo cách geoBoundaries gọi |
+| `boundary_canonical`, `boundary_year`, `boundary_license` | string | Tên gọi chính thức của cấp (`Districts`), năm đại diện, license |
+| `geometry` | string | Polygon GeoJSON dạng chuỗi |
+| `raw_payload` | string | Properties gốc của feature |
+| `_provider` | string | Luôn là `geoboundaries` — cột để Silver phân biệt với dòng COD chính thức |
+| + lineage | | `_source`, `_ingested_at`, `_source_file`, `ingestion_date`, `_version` |
+
+`_version` = `boundaryID` của geoBoundaries (vd `BRN-ADM1-89281809`).
 
 ## 5. Lấy dữ liệu Bronze mới nhất
 

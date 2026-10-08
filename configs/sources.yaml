@@ -142,6 +142,39 @@ sources:
     # VNM (28 MB): 34 tinh moi tu 1/7/2025, dung de noi 63 tinh cu -> moi.
     geometry_countries: [VNM]
 
+  # --- Ranh gioi va lap cho nuoc COD-AB khong co -------------------------
+  # Da kiem chung 08/10/2026: cod-ab-brn / cod-ab-bru / cod-ab-brunei-darussalam
+  # deu tra HTTP 404. HDX co 84 dataset cho Brunei nhung khong cai nao la COD-AB,
+  # nen day la lo hong that cua nguon. geoBoundaries (gbOpen, Public Domain) co
+  # 4 district cap ADM1 cho Brunei, khop 4/4 voi adm_1_name cua OpenDengue.
+  # Ghi BANG RIENG chu khong tron vao hdx_cod_ab: shapeID cua geoBoundaries
+  # khong phai P-code OCHA, tron chung se khien Silver tuong moi dong deu chuan.
+  geoboundaries_adm:
+    enabled: true
+    source_type: rest_api
+    source_format: geojson
+    schedule: weekly           # ranh gioi doi hiem, geoBoundaries phat hanh theo dot
+    url: https://www.geoboundaries.org/api/{release}/gbOpen/{iso3}/{level}/
+    release: current
+    timeout_seconds: 180
+    # CO Y giu hep: chi nuoc ma hdx_cod_ab khong phu. SGP khong co o day vi
+    # geoBoundaries tra 5 "region" con OpenDengue chi co 1 dong CENTRAL SINGAPORE
+    # - khac cap, va Singapore da co nguon rieng sg_nea.
+    countries:
+      BRN: [ADM1]
+
+  # --- Bang noi 64 tinh cu -> 34 tinh moi cua Viet Nam --------------------
+  # Khong phai nguon tai tu mang: seed file trong repo, vi day la du lieu phap ly
+  # co dinh (NQ 202/2025/QH15) va HDX chi phat hanh ban hien hanh 34 tinh, khong
+  # luu lich su. Moi lan chay deu doi chieu nguoc voi bang Bronze hdx_cod_ab -
+  # seed sai hoac COD-AB doi P-code thi job FAILED chu khong ghi bang lech.
+  vn_province_crosswalk:
+    enabled: true
+    source_type: seed_file
+    source_format: csv
+    schedule: weekly           # chi doi khi co nghi quyet moi
+    seed_file: configs/reference/vn_province_merge_2025.csv
+
   # Dan so cap tinh (UN OCHA COD-PS) - de tinh ca / 100.000 dan.
   hdx_cod_ps:
     enabled: true
