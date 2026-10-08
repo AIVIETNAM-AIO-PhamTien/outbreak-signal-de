@@ -50,7 +50,9 @@ dữ liệu giả lập.**
 | **[OpenDengue](https://opendengue.org/data.html)** (`opendengue`) | Số ca cấp quốc gia + tỉnh (`Spatial_extract`), lọc 11 nước | CSV trong zip | kiểm tra hằng ngày | Lịch sử dài (1960→), nhưng trễ ~17 tháng |
 | **[WHO GHO](https://xmart-api-public.who.int/ARBOV/V_DENGUE_GLOBAL_VALIDATED_PUBLIC)** (`who_gho`) | Số ca cấp quốc gia, 9/11 nước (không có PHL, BRN) | JSON (OData) | hằng ngày | Số ca **gần đây** (trễ ~5 tuần) |
 | **[Google News RSS](https://news.google.com/rss)** (`news_rss`) | 11 feed theo nước, ngôn ngữ bản xứ, 7 ngày gần nhất | XML | 30 phút | Tín hiệu sớm |
-| **[HDX COD-AB](https://data.humdata.org/)** (`hdx_cod_ab`) | Đơn vị hành chính (P-code, tên, toạ độ tâm), 9 nước | XLSX | hằng tuần | Khoá cấp tỉnh |
+| **[HDX COD-AB](https://data.humdata.org/)** (`hdx_cod_ab`) | Đơn vị hành chính (P-code, tên, toạ độ tâm), 9/11 nước (không có SGP, BRN) | XLSX | hằng tuần | Khoá cấp tỉnh |
+| **[geoBoundaries](https://www.geoboundaries.org/)** (`geoboundaries_adm`) | Ranh giới vá lấp cho nước COD-AB không có — hiện là Brunei, 4 district | GeoJSON | hằng tuần | Lấp lỗ hổng BRN |
+| **Bảng nối tỉnh VN** (`vn_province_crosswalk`) | 64 tỉnh cũ → 34 tỉnh mới (NQ 202/2025/QH15 + Hà Tây 2008) | CSV (seed trong repo) | hằng tuần | Bắt buộc để join cấp tỉnh VN |
 | **HDX COD-PS** (`hdx_cod_ps`) | Dân số theo đơn vị hành chính | CSV | hằng tuần | Ca / 100.000 dân |
 | **[TRENDS](https://zenodo.org/)** (`trends_th_*`) | Thái Lan, tuần × 77 tỉnh, 2016–2025 | XLSX (Zenodo) | hằng tuần | Số ca cấp tỉnh gần đây |
 | **PH DOH** (`ph_doh`) | Philippines, tuần × tỉnh, tới 12/2020 | CSV (HDX) | hằng tuần | Số ca cấp tỉnh (lịch sử) |
@@ -150,6 +152,10 @@ bài trùng thuộc về Silver.
 │   ├── opendengue.py  news_rss.py  who_gho.py
 │   ├── hdx_cod.py                 # hdx_cod_ab + hdx_cod_ps
 │   ├── trends_th.py  ph_doh.py  sg_nea.py
+│   ├── geoboundaries.py          # ranh giới vá lấp (BRN)
+│   ├── vn_province_crosswalk.py  # bảng nối 64 → 34 tỉnh VN
+├── configs/reference/             # seed data cố định, không tải từ mạng
+│   └── vn_province_merge_2025.csv
 ├── scripts/
 │   ├── run_batch.py               # ingest — điểm vào của Bronze
 │   ├── check_bronze.py            # đọc lại Bronze để kiểm tra
@@ -259,6 +265,8 @@ Bronze sau khi chạy thật (29/09/2026):
 | `trends_th_weekly` / `trends_th_province` | 40.579 / 77 | 24 / 22 | `_release` |
 | `ph_doh` | 32.701 | 10 | `_version` |
 | `sg_nea` | 11 cụm | 19 | `ingestion_date` |
+| `geoboundaries_adm` | 4 (BRN ADM1) | 17 | `_partition` |
+| `vn_province_crosswalk` | 64 → 34 đơn vị | 12 | `_version` |
 
 ### Lên lịch (Windows Task Scheduler)
 
@@ -267,6 +275,7 @@ Bronze sau khi chạy thật (29/09/2026):
 | News | `run_batch.py --source news_rss` | 30 phút |
 | Nguồn theo ngày | `run_batch.py --source opendengue --source who_gho --source sg_nea` | 1 lần/ngày |
 | Nguồn theo tuần | `run_batch.py --source hdx_cod_ab --source hdx_cod_ps --source trends_th --source ph_doh` | 1 lần/tuần |
+| Tham chiếu địa lý | `run_batch.py --source geoboundaries_adm --source vn_province_crosswalk` | 1 lần/tuần, **sau** `hdx_cod_ab` |
 
 ## 8. Metadata mỗi lần chạy
 

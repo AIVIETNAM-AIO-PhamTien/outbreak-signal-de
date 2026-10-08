@@ -21,7 +21,17 @@ from pathlib import Path
 # PYTHONPATH: them goc repo vao sys.path truoc khi import package ingestion.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ingestion import hdx_cod, news_rss, opendengue, ph_doh, sg_nea, trends_th, who_gho  # noqa: E402
+from ingestion import (  # noqa: E402
+    geoboundaries,
+    hdx_cod,
+    news_rss,
+    opendengue,
+    ph_doh,
+    sg_nea,
+    trends_th,
+    vn_province_crosswalk,
+    who_gho,
+)
 from ingestion.common.config import all_sources, source_config  # noqa: E402
 from ingestion.common.logging import get_logger  # noqa: E402
 from ingestion.common.metadata import (  # noqa: E402
@@ -44,6 +54,9 @@ JOBS = {
     "trends_th": trends_th.ingest,
     "ph_doh": ph_doh.ingest,
     "sg_nea": sg_nea.ingest,
+    "geoboundaries_adm": geoboundaries.ingest,
+    # Chay SAU hdx_cod_ab: buoc doi chieu P-code can bang do da ton tai.
+    "vn_province_crosswalk": vn_province_crosswalk.ingest,
 }
 
 
