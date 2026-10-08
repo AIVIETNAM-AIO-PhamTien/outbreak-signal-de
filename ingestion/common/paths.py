@@ -21,6 +21,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LANDING_ROOT = PROJECT_ROOT / "data" / "landing"
 BRONZE_ROOT = PROJECT_ROOT / "data" / "bronze"
+SILVER_ROOT = PROJECT_ROOT / "data" / "silver"
 METADATA_ROOT = PROJECT_ROOT / "data" / "metadata"
 LOG_ROOT = PROJECT_ROOT / "logs"
 
@@ -89,6 +90,11 @@ def bronze_path(source: str) -> Path:
         Duong dan bang Delta.
     """
     return BRONZE_ROOT / source
+
+
+def silver_path(table: str) -> Path:
+    """Return the root directory of a Silver Delta table."""
+    return SILVER_ROOT / table
 
 
 def metadata_dir(source: str, ingestion_date: str) -> Path:

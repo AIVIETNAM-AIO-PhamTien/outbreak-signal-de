@@ -1,4 +1,4 @@
-# OutbreakSignal DE - Dengue Early Warning (Bronze Ingestion)
+# OutbreakSignal DE - Dengue Early Warning (Bronze + Silver)
 
 Hệ thống thu thập và lưu trữ dữ liệu cảnh báo sớm dịch sốt xuất huyết ở **11 nước Đông Nam Á**.
 Nhóm Microwave - AIO 2026, Module 4 (*Data Sources and Data Ingestion using PySpark*).
@@ -20,12 +20,14 @@ py -3.11 -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 .venv\Scripts\python.exe scripts\run_batch.py        # ingest mọi nguồn: Landing → Bronze
 .venv\Scripts\python.exe scripts\check_bronze.py     # đọc lại Bronze để kiểm tra
+.venv\Scripts\python.exe scripts\run_silver.py       # dựng các bảng Silver
 ```
 ```bash
 # Linux / macOS
 python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python scripts/run_batch.py
 .venv/bin/python scripts/check_bronze.py
+.venv/bin/python scripts/run_silver.py
 ```
 
 `data/` được gitignore, không có sẵn trong repo; ai clone về cũng tự chạy để sinh dữ liệu.
@@ -36,9 +38,11 @@ Phát hiện sớm những khu vực có nguy cơ bùng phát sốt xuất huy�
 hợp tín hiệu tin tức (nhanh, nhưng không có số liệu) với baseline mùa vụ tính từ số ca chính
 thức (chính xác, nhưng trễ). Đây là thống kê mô tả, không phải mô hình dự báo.
 
-Phạm vi repo này dừng ở **tầng Bronze**: thu thập dữ liệu từ nhiều nguồn, giữ nguyên trạng, và
-đưa vào một data lake có cấu trúc (Delta Lake) để tầng Silver xử lý tiếp. Một bản Silver/Gold +
-app thử độ khả thi nằm ở nhánh `feat/silver-gold`.
+Repo triển khai tầng **Bronze** cho các nguồn và ba bảng **Silver**: `dengue_history` từ
+OpenDengue + WHO GHO (quốc gia và cấp 1, không chồng kỳ trong cùng địa điểm), và
+`administrative_boundaries` từ HDX COD-AB (danh mục quốc gia/cấp 1 với điểm đại diện),
+và `news` từ Google News RSS.
+Các nguồn khác, Gold và app thử độ khả thi nằm ở nhánh `feat/silver-gold`.
 
 ## 2. Nguồn dữ liệu
 
@@ -62,8 +66,9 @@ dữ liệu giả lập.**
 - OpenDengue có lịch sử dài và phủ đủ 11 nước.
 - WHO GHO mới hơn nhiều, nhưng thiếu Philippines và Brunei.
 
-Trên 162 tháng cả hai nguồn cùng có số liệu, độ lệch trung vị là 0%, nên hai nguồn ghép được
-thành một chuỗi lịch sử chung ở Silver.
+`dengue_history` chọn chuỗi cấp quốc gia từ hai nguồn: ưu tiên OpenDengue, chỉ bổ sung WHO ở
+kỳ không giao với OpenDengue; đồng thời giữ chuỗi cấp tỉnh (`Admin1`) của OpenDengue.
+`_source` trên mỗi dòng cho biết nguồn được chọn.
 
 ## 3. Kiến trúc
 
@@ -141,6 +146,132 @@ bài trùng thuộc về Silver.
 - **Vì sao dùng `Spatial_extract`:** `National_extract` không có cấp tỉnh (`adm_1_name` luôn
   là `"NA"`).
 
+### 4.3 Silver: Bronze OpenDengue + WHO GHO, Silver COD-AB → `dengue_history`
+
+Chạy `.venv/bin/python scripts/run_silver.py` (Windows:
+`.venv\Scripts\python.exe scripts\run_silver.py`) sau khi đã có Bronze OpenDengue, WHO GHO và
+HDX COD-AB. Job dựng `administrative_boundaries` trước, sau đó chọn release OpenDengue và
+snapshot WHO mới nhất, làm sạch mỗi nguồn trong Spark, chọn kỳ và ánh xạ P-code COD-AB trước
+khi ghi `data/silver/dengue_history/`. Ngay cả khi chỉ định `--table dengue_history`,
+job vẫn làm mới `administrative_boundaries` trước. **Không đọc hoặc ghi `dengue_unified`**.
+
+Bảng có đúng 13 cột: `adm_0_name`, `adm_1_name`, `iso3`, `p_code`, `start_date`, `year`,
+`dengue_total`, `s_res`, `t_res`, `_source`, `_source_file`, `_bronze_ingested_at`,
+`_silver_ingested_at`. `iso3` lấy từ `ISO_A0` (OpenDengue) hoặc `ISO3` (WHO);
+`start_date` là `date`, `year` là
+`int`, `dengue_total` là `bigint`, hai cột thời điểm là `timestamp`; các cột còn lại là
+`string`.
+
+- Cắt khoảng trắng, đổi `NA`/`N/A`/`NULL`/`NONE` và chuỗi rỗng thành null ở các cột văn bản;
+  viết hoa chữ đầu từng từ của `adm_0_name` (vd `VIET NAM` → `Viet Nam`,
+  `TIMOR-LESTE` → `Timor-Leste`). `adm_1_name` cũng viết hoa chữ đầu từng từ rồi
+  bỏ toàn bộ khoảng trắng (vd `HAI PHONG` → `HaiPhong`), chuẩn hoá ISO3 và nhãn độ phân giải. `t_res` luôn viết
+  thường: OpenDengue `Week` → `epiweek`, `Month` → `month`, `Year` → `year`; đây chỉ là
+  đổi nhãn theo kỳ Chủ nhật–Thứ bảy, **không dời ngày hoặc phân bổ lại số ca**.
+- Bỏ dòng thiếu nước/ISO3/ngày/năm/số ca hoặc lineage bắt buộc; bỏ ngày tương lai, số ca âm,
+  giá trị không ép kiểu được và độ phân giải thời gian ngoài `epiweek`/`month`/`year`.
+  `adm_1_name` null ở `Admin0`; `Admin1` OpenDengue phải có tên tỉnh.
+- Chống trùng theo địa điểm + kỳ + độ phân giải. Nếu nhiều định nghĩa ca cùng grain, ưu tiên
+  `Total` → `Suspected and confirmed` → `Confirmed`. Nếu **cùng định nghĩa** nhưng số ca mâu
+  thuẫn, job báo lỗi thay vì chọn tuỳ tiện. `UUID` không được dùng làm khoá dòng.
+- Schema 13 cột không có `adm_2_name`, nên **không đưa `Admin2` vào chuỗi này**; `Admin1` của
+  OpenDengue được giữ, còn WHO chỉ có `Admin0`. Bronze vẫn giữ `Admin2` để thiết kế bảng chi
+  tiết khác nếu cần. HDX COD-AB là chuẩn: job dựng `administrative_boundaries` trước, kiểm tra
+  cặp ISO3/tên nước của cả OpenDengue lẫn WHO. `adm_0_name` vẫn giữ khoảng trắng;
+  `adm_1_name` lưu dạng liền chữ ở cả hai bảng Silver. Khóa so sánh tên không phân biệt
+  hoa/thường. `Admin0` ghép theo ISO3; `Admin1` thử khóa `(iso3, adm_1_name)` theo HDX, rồi thử
+  công thức RNE `TH-10` → COD `TH10`, `KH-1` → `KH01` cho **chỉ Thái Lan và Campuchia**.
+  Công thức phải ra mã thực có trong HDX; tên và mã cho kết quả khác nhau thì job báo lỗi.
+  Không có bảng/file alias và không ghép mờ. Nước thiếu HDX và tỉnh Việt Nam lịch sử giữ dòng
+  bệnh nhưng để `p_code=NULL`; Admin0 Việt Nam vẫn ghép được mã quốc gia `VN`.
+  Không áp công thức chung: OpenDengue `MY-04` là Melaka, còn HDX `MY04` là Kuala Lumpur.
+
+Trên snapshot `V1.3` hiện có: 70.557 dòng Bronze → loại khỏi phạm vi 9.060 dòng `Admin2` →
+61.497 dòng OpenDengue đã làm sạch **trong Spark**; các kỳ `Admin0` và `Admin1` đều được cân
+nhắc cho `dengue_history`. Job in số dòng lỗi/trùng sau mỗi lần chạy.
+
+WHO GHO đọc **snapshot Bronze theo `ingestion_date` mới nhất** (mỗi ngày là một snapshot đầy
+đủ), ánh xạ `COUNTRY` → `adm_0_name`, `ISO3` → `iso3`, `CASES` → `dengue_total`,
+`DATE_TYPE` → `t_res` (`month`/`isoweek`/`epiweek`). WHO chỉ có cấp quốc gia nên `s_res=Admin0`,
+`adm_1_name` và `p_code` để null. Các dòng thiếu `START_DATE` loại `month` được điền ngày 1
+của tháng từ `YEAR` và `DATE_NUM`; **không tự suy ngày cho tuần ISO/epi** vì hai quy ước tuần
+khác nhau. Bỏ các dòng có `start_date` trong tương lai, ngày hoặc số ca không hợp lệ; khử trùng
+theo `(iso3, year, t_res, DATE_NUM)` và báo lỗi nếu cùng khóa nhưng số ca/ngày mâu thuẫn.
+
+`data/silver/dengue_history/` là bảng **dùng để đọc chuỗi lịch sử quốc gia và tỉnh**.
+Mỗi kỳ là khoảng nửa mở `[start_date, ngày_kết_thúc)`: tuần 7 ngày, tháng đến ngày 1 tháng
+sau, năm đến ngày 1 năm sau. Trong OpenDengue, khi các kỳ chồng nhau, ưu tiên độ chi tiết
+**tuần → tháng → năm**; WHO cũng theo thứ tự đó (tuần ISO trước epiweek nếu giao nhau).
+Một kỳ WHO chỉ được lấy khi **không giao với bất kỳ kỳ OpenDengue gốc nào** của cùng nước,
+kể cả kỳ OpenDengue bị loại vì chồng với kỳ chi tiết hơn. Với `Admin1`, cũng chọn tuần → tháng
+→ năm **trong cùng tỉnh**; kỳ quốc gia và kỳ tỉnh được giữ song song. Không chia nhỏ hay cộng
+gộp số ca; `_source` và các cột lineage được giữ để truy vết. Khi tính tổng, **không cộng
+`Admin0` và `Admin1` với nhau** vì sẽ đếm trùng. Chuỗi không bảo đảm đủ mọi ngày nếu nguồn vốn
+thiếu dữ liệu.
+`data/silver/dengue_unified/` có thể còn trên máy từ phiên bản pipeline trước; bản cũ đó
+**không được job hiện tại cập nhật hay sử dụng** và chưa bị xóa để giữ khả năng đối chiếu.
+Trên snapshot hiện tại: 4.841 kỳ OpenDengue `Admin0` → giữ 4.739; 56.656 kỳ OpenDengue
+`Admin1` → giữ 56.207; 1.227 kỳ WHO `Admin0` → giữ 805. `dengue_history` có **61.751 kỳ**.
+Trong đó 41.101/56.207 dòng `Admin1` và 4.188 dòng `Admin0` ghép được mã COD:
+38.402 dòng `Admin1` theo khoá tên bỏ khoảng trắng, 2.699 qua công thức mã nguồn
+Thái Lan/Campuchia. Còn 15.106 dòng `Admin1` để `p_code=NULL` (Việt Nam 12.273,
+Lào 1.327, Indonesia 1.172, Singapore 216, Brunei 56, Philippines 21,
+Malaysia 19, Timor-Leste 16, Myanmar 6). Đây là hệ quả có chủ đích của việc bỏ alias
+và không gắn ca tỉnh lịch sử Việt Nam vào bộ ranh giới 34 tỉnh hiện tại.
+Các số này thay đổi khi nguồn được cập nhật.
+
+### 4.4 Silver: HDX COD-AB → `administrative_boundaries`
+
+Lệnh `scripts/run_silver.py` mặc định dựng cả hai bảng Silver. Chỉ dựng danh mục hành chính:
+`.venv/bin/python scripts/run_silver.py --table administrative_boundaries` (Windows dùng
+`.venv\Scripts\python.exe`). Job đọc `data/bronze/hdx_cod_ab/`, lấy sheet `admin1` và nối
+`adminpoints` cấp 1 theo `(iso3, adm1_pcode)`, rồi ghi Delta ở
+`data/silver/administrative_boundaries/`.
+
+Bảng có 11 cột: `adm_0_name`, `adm_1_name`, `iso3`, `p_code`, `valid_on`, `x_coord`, `y_coord`,
+`_source`, `_source_file`, `_bronze_ingested_at`, `_silver_ingested_at`. Mỗi nước có một dòng
+`adm_1_name=NULL`, `p_code=adm0_pcode`, tọa độ null vì nguồn không có điểm cấp quốc gia.
+Mỗi đơn vị cấp 1 lưu `adm_1_name` không có khoảng trắng (vd `An Giang` → `AnGiang`),
+có `p_code=adm1_pcode`; `x_coord` là **kinh độ**, `y_coord` là **vĩ độ**
+(`double`), ưu tiên từ `adminpoints`, thiếu thì dùng `center_lon/center_lat`. `valid_on` là
+`date`; hai cột ingest là `timestamp`. Job báo lỗi nếu thiếu khóa, ngày, lineage hay tọa độ
+cấp 1, nếu trùng khóa `(iso3, p_code)`, hoặc nếu một nước có nhiều tên/mã Admin0 không nhất
+quán. Chạy lại ghi đè toàn bộ bảng, không nhân đôi.
+
+Snapshot hiện có: **9 nước + 252 đơn vị cấp 1 = 261 dòng**. Singapore và Brunei không có
+COD-AB. Ở Philippines, cấp 1 là **vùng**, còn tỉnh thuộc cấp 2 và không nằm trong schema này.
+Bảng này chỉ có **điểm đại diện, không có polygon**; polygon Việt Nam nằm ở Bronze
+`hdx_cod_ab_geometry`. Ghép tên chỉ xác nhận tên và mã COD tại snapshot, **không chứng minh
+ranh giới lịch sử tương ứng**. Ví dụ OpenDengue Việt Nam cấp tỉnh là dữ liệu 1994–2010, còn
+COD-AB hiện dùng 34 tỉnh theo snapshot 2025: cùng tên vẫn có thể khác diện tích. Không dùng
+P-code vừa ghép để tô bản đồ lịch sử nếu chưa đối chiếu phiên bản ranh giới theo thời gian.
+`valid_on` chưa đủ để biểu diễn đầy đủ lịch sử đổi ranh giới nếu không có `valid_to`/SCD2.
+OpenDengue có 11 ISO3, WHO có 9 ISO3, HDX có 9 ISO3. HDX thiếu Brunei và Singapore;
+WHO thiếu Brunei và Philippines. Các ISO3 chung và tên nước sau chuẩn hoá khớp HDX.
+Với RNE cấp tỉnh, chỉ Thái Lan (77/77 mã) và Campuchia (24/24 mã sau zero-padding)
+có công thức số được xác nhận trên snapshot này. Indonesia, Lào, Myanmar, Philippines và
+Timor-Leste dùng hệ mã khác. Malaysia có 14/15 mã số *trông giống* P-code nhưng nhiều mã
+chỉ sai địa bàn (`MY-04` = Melaka, `MY04` = Kuala Lumpur), nên không được dùng công thức.
+Việt Nam có 18/63 mã nhìn như trùng nhưng snapshot HDX là địa giới mới, nên không tự gán
+P-code cấp tỉnh. Các dòng còn `NULL` cần thêm nguồn ranh giới/hiệu lực hoặc đối chiếu thủ
+công; không tự suy P-code chỉ vì mã có cùng định dạng.
+
+### 4.5 Silver: Google News RSS → `news`
+
+Chạy độc lập bằng `.venv/bin/python scripts/run_silver.py --table news` (Windows:
+`.venv\Scripts\python.exe scripts\run_silver.py --table news`). Job chỉ đọc
+`data/bronze/news_rss/` và chỉ ghi `data/silver/news/`; không đọc/ghi các bảng Silver khác.
+Bảng có các cột trong sơ đồ: `guid`, `title`, `description`, `iso3`, `feed_gl`, `feed_query`,
+`link`, `pubDate`, `source_url`, `_source_file`, cùng metadata `_source`,
+`_bronze_ingested_at`, `_silver_ingested_at`. `iso3` lấy từ `feed_country`: đây là nước của
+**feed**, không phải địa điểm được xác định từ nội dung bài báo.
+
+Silver cắt khoảng trắng, giải mã HTML của tiêu đề, bỏ thẻ HTML ở mô tả, đổi `pubDate`
+RFC 822 sang `timestamp` UTC, loại dòng thiếu khóa/tên/link/ngày hoặc lineage không hợp lệ;
+`description` và `source_url` được phép null. Trùng bài trong cùng
+`(guid, iso3, feed_gl, feed_query)` giữ lần `_fetched_at` mới nhất; cùng bài ở nhiều feed
+quốc gia vẫn được giữ ở từng feed. Bronze không bị sửa.
+
 ## 5. Cấu trúc thư mục
 
 ```
@@ -159,6 +290,7 @@ bài trùng thuộc về Silver.
 ├── scripts/
 │   ├── run_batch.py               # ingest — điểm vào của Bronze
 │   ├── check_bronze.py            # đọc lại Bronze để kiểm tra
+│   ├── run_silver.py              # Bronze → ba bảng Silver (có --table)
 │   └── smoke_test.py              # kiểm tra Spark + Delta + Java
 ├── tests/
 ├── docs/
@@ -167,7 +299,7 @@ bài trùng thuộc về Silver.
 │   └── handout-silver-layer.md    # data dictionary Bronze cho người làm Silver
 ├── spikes/  notebooks/  assets/
 ├── data/                          # gitignored — tự sinh khi chạy
-│   ├── landing/ bronze/ metadata/
+│   ├── landing/ bronze/ silver/ metadata/
 ├── logs/                          # gitignored
 └── .hadoop/bin/                   # gitignored, chỉ Windows — xem Bước 3
 ```
@@ -330,10 +462,15 @@ Các vấn đề dữ liệu Silver cần xử lý: [docs/handout-silver-layer.m
 | `test_ingestion_units` | Parse RSS, chọn release OpenDengue, HDX, TRENDS, SG NEA, retry HTTP |
 | `test_integration_bronze`, `test_integration_who_gho` | Chuỗi nguồn → ingestion → Bronze → metadata, chạy thật Spark + Delta |
 | `test_integration_reruns` | Chạy lại sau lỗi giữa chừng, bảng Bronze cũ không tương thích, CSV có xuống dòng trong ô, SG NEA về 0 cụm |
+| `test_silver_opendengue` | Làm sạch null/trùng/kiểu dữ liệu, chọn release mới nhất, chạy lại không ghi đè source khác |
+| `test_silver_who_gho` | Điền ngày tháng bị thiếu, loại ngày tương lai, kiểm tra trùng và chỉ thay partition WHO |
+| `test_silver_dengue_history` | Ưu tiên OpenDengue, kiểm tra kỳ giao nhau và dựng thẳng từ hai Bronze, không tạo bảng trung gian |
+| `test_silver_administrative_boundaries` | Cấp 0/1, nối điểm HDX, validate tọa độ/khóa và chạy lại Delta |
+| `test_silver_news` | Chuẩn hóa RSS, loại dòng lỗi/trùng theo feed và ghi Delta độc lập |
 
 ## 11. Ngoài phạm vi
 
-Chưa triển khai trong repo này: Silver, Gold, dashboard (bản thử ở nhánh `feat/silver-gold`),
+Chưa triển khai trong repo này: Silver cho nguồn khác ngoài OpenDengue/WHO/HDX COD-AB/news RSS, Gold, dashboard (bản thử ở nhánh `feat/silver-gold`),
 machine learning, dự báo bùng phát, NLP, Kafka, streaming, Airflow, dbt, Dagster, Snowflake,
 LLM, vector database.
 
